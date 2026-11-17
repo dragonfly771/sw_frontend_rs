@@ -1,7 +1,7 @@
 //use defmt::trace;
 
 use crate::driver::delay_ms;
-use corelib::{CoreError, Eeprom, EepromTrait, profile_always_0};
+use corelib::{profile_always_0, CoreError, Eeprom, EepromTrait};
 use eeprom24x::{addr_size::TwoBytes, page_size::B32, Eeprom24x, SlaveAddr};
 use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 

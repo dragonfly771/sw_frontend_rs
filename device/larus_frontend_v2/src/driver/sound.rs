@@ -19,6 +19,13 @@ use crate::{utils::samples::*, SoundParams, Waveform};
 /// generated. This applies to non-continuous tones, mute function and switching the desired
 /// waveform.
 ///
+/// Switching at the zero crossing removes the step in the signal, but not the kink: a tone that
+/// starts and stops abruptly still spreads energy over the whole spectrum and is heard as a hard
+/// edge. The output therefore runs through an exponential attack/release envelope, matching the
+/// tone lab (attack = the configured time, release twice as long). The envelope is interpolated
+/// across the samples of one period, so even the lowest tones get a real ramp instead of a
+/// single step.
+///
 /// In this module, unsafe is used several times to access the controller peripherals. This is
 /// unavoidable, necessary and tests did not reveal any problems.
 use stm32h7xx_hal::{
@@ -32,6 +39,14 @@ use stm32h7xx_hal::{
 static mut SAMPLES: [u16; SAMPLES_COUNT] = [2047; SAMPLES_COUNT];
 const SILENCE: [u16; SAMPLES_COUNT] = [2047; SAMPLES_COUNT];
 
+/// Lowest frequency the DAC timer can serve.
+///
+/// The reload value of the timer is a u16, so it overflows below
+/// H7_HCLK / SAMPLES_COUNT / u16::MAX. A little head room is added on top.
+const MIN_FREQ: f32 = (H7_HCLK / SAMPLES_COUNT as u32 / u16::MAX as u32) as f32 + 10.0;
+/// Highest frequency handed to the DAC timer (covers the whole configurable range)
+const MAX_FREQ: f32 = 3100.0;
+
 #[allow(unused)]
 pub struct Sound {
     dac: C1<DAC, Disabled>,
@@ -43,11 +58,19 @@ pub struct Sound {
     next_f: f32,
     curr_f: f32,
     delta_f: f32,
+    /// should the tone sound in the current period?
     on: bool,
+    /// current value of the attack/release envelope, 0.0 .. 1.0
+    env: f32,
+    /// the sample buffer has to be written to the DMA area again
+    dirty: bool,
     params: SoundParams,
-    old_gain: i8,
-    buffer: [u16; SAMPLES_COUNT],
+    /// waveform scaled by volume and amplitude, without the DAC offset
+    buffer: [f32; SAMPLES_COUNT],
 }
+
+/// Below this distance the envelope is snapped onto its target
+const ENV_EPSILON: f32 = 0.01;
 
 impl Sound {
     pub fn new(dac: C1<DAC, Disabled>, tim: pac::TIM6, dma1_stream0: Stream0<DMA1>) -> Self {
@@ -97,10 +120,11 @@ impl Sound {
             next_f: 1000.0,
             curr_f: 1000.0,
             delta_f: 0.0,
-            on: true,
+            on: false,
+            env: 0.0,
+            dirty: true,
             params: SoundParams::default(),
-            buffer: [2047; SAMPLES_COUNT],
-            old_gain: 0,
+            buffer: [0.0; SAMPLES_COUNT],
         }
     }
 
@@ -113,11 +137,16 @@ impl Sound {
         let devider = self.tim.arr.read().bits();
         self.wave_ctr = 0;
         self.curr_f = H7_HCLK as f32 / SAMPLES_COUNT as f32 / devider as f32;
-        // Calculate delta frequency asume 10 Hz tick rate
         self.next_f = self.params.frequency as f32;
-        self.delta_f = (self.next_f - self.curr_f) / self.curr_f * 10.0;
-        // let devider = (100_000_000 / SAMPLES_COUNT as u32 / fq as u32) as u16;
-        // self.tim.arr.write(|w| w.arr().bits(devider)); // preload register
+        if self.params.glide {
+            // Calculate delta frequency asume 10 Hz tick rate
+            self.delta_f = (self.next_f - self.curr_f) / self.curr_f * 10.0;
+        } else {
+            // Pattern tones take their pitch at once. The timer reload is written in the
+            // interrupt, so the change still lands on a period boundary and stays phase clean.
+            self.curr_f = self.next_f;
+            self.delta_f = 0.0;
+        }
 
         // get source pointer of sound samples
         let wave = match self.params.waveform {
@@ -134,15 +163,21 @@ impl Sound {
             0.5
         };
 
-        // copy changes into buffer
+        // `amplitude` carries the base level, the loudness compensation and the airspeed
+        // dependent volume; it is calculated in the core.
+        let factor = volume_factor * self.params.amplitude;
         for idx in 0..(SAMPLES_COUNT) {
-            self.buffer[idx] = 2047 + (wave[idx] * volume_factor) as u16;
+            self.buffer[idx] = wave[idx] * factor;
         }
+        self.dirty = true;
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
-        self.params.waveform = waveform;
-        self.set_wave(self.on);
+        let params = SoundParams {
+            waveform,
+            ..self.params
+        };
+        self.set_params(&params);
     }
 
     pub fn waveform(&self) -> Waveform {
@@ -157,51 +192,102 @@ impl Sound {
         // calc next frequency
         self.curr_f += self.delta_f;
         self.wave_ctr += 1;
-        if self.curr_f > 200.0 && self.curr_f < 2000.0 {
+        if self.curr_f > MIN_FREQ && self.curr_f < MAX_FREQ {
             let devider = (H7_HCLK / SAMPLES_COUNT as u32 / self.curr_f as u32) as u16;
             self.tim.arr.write(|w| w.arr().bits(devider)); // preload register
         }
 
         self.cycle_counter += 1;
 
-        if self.params.gain == 0 {
-            if self.cycle_counter >= self.duty_cycle {
-                self.cycle_counter = 0;
-            }
-            if self.on {
-                self.set_wave(false);
-            }
-        } else if self.cycle_counter >= self.duty_cycle {
+        // Decide whether the tone should sound in the period that is starting now.
+        let sound_on = if self.params.gain == 0 {
+            // muted
             self.cycle_counter = 0;
-            match self.params.continuous {
-                true => {
-                    if !self.on {
-                        self.set_wave(true);
-                    }
-                }
-                false => match self.on {
-                    true => self.set_wave(false),
-                    false => self.set_wave(true),
-                },
+            false
+        } else if self.params.continuous {
+            // The driver does not gate on its own here. Either the tone is continuous (classic
+            // sink tone, gate is always true) or the beep pattern comes from the sequencer in
+            // the core, which toggles `gate`.
+            self.cycle_counter = 0;
+            self.params.gate
+        } else if self.cycle_counter >= self.duty_cycle {
+            // classic beep: the driver counts full oscillations and toggles the tone itself
+            self.cycle_counter = 0;
+            !self.on
+        } else {
+            self.on
+        };
+        self.on = sound_on;
+
+        let target = if sound_on { 1.0 } else { 0.0 };
+        let env = self.env;
+        if env != target {
+            let mut next = env + (target - env) * self.env_factor();
+            if (target - next) < ENV_EPSILON && (next - target) < ENV_EPSILON {
+                next = target;
             }
-        } else if self.old_gain != self.params.gain {
-            self.set_wave(self.on);
+            self.write_samples(env, next);
+            self.env = next;
+            self.dirty = false;
+        } else if self.dirty {
+            self.write_samples(env, env);
+            self.dirty = false;
         }
     }
 
-    fn set_wave(&mut self, sound_on: bool) {
-        self.on = sound_on;
-        self.old_gain = self.params.gain;
-
-        // unsafe ist ok her becaus the access ist synchronized to dma access
-        if sound_on {
-            unsafe {
-                SAMPLES = self.buffer;
-            }
+    /// Step of the exponential envelope for one period of the tone
+    ///
+    /// The tone lab uses a time constant of attack/3 for the attack and twice that for the
+    /// release, so the envelope has reached about 95 % after the configured time.
+    fn env_factor(&self) -> f32 {
+        let attack_ms = if self.params.attack_ms < 0.5 {
+            0.5
         } else {
+            self.params.attack_ms
+        };
+        let time_const_ms = if self.on {
+            attack_ms / 3.0
+        } else {
+            2.0 * attack_ms / 3.0
+        };
+        // one period of the tone currently being played
+        let frequency = if self.curr_f < MIN_FREQ {
+            MIN_FREQ
+        } else {
+            self.curr_f
+        };
+        let period_ms = 1000.0 / frequency;
+        let factor = period_ms / time_const_ms;
+        if factor > 1.0 {
+            1.0
+        } else {
+            factor
+        }
+    }
+
+    /// Write one period into the DMA area, interpolating the envelope across the samples
+    ///
+    /// Doing the interpolation inside the period matters: the interrupt only fires once per
+    /// oscillation, so without it the shortest possible ramp would be one whole period - almost
+    /// 3 ms at the 350 Hz zero tone, which is exactly the hard edge we want to get rid of.
+    fn write_samples(&mut self, from_env: f32, to_env: f32) {
+        if from_env <= 0.0 && to_env <= 0.0 {
+            // unsafe is ok here because the access is synchronized to the dma access
             unsafe {
                 SAMPLES = SILENCE;
             }
+            return;
+        }
+        let step = (to_env - from_env) / SAMPLES_COUNT as f32;
+        let mut env = from_env;
+        let mut period = [2047_u16; SAMPLES_COUNT];
+        for idx in 0..(SAMPLES_COUNT) {
+            env += step;
+            period[idx] = (2047.0 + self.buffer[idx] * env) as u16;
+        }
+        // unsafe is ok here because the access is synchronized to the dma access
+        unsafe {
+            SAMPLES = period;
         }
     }
 }

@@ -33,9 +33,13 @@ impl InfoView {
                 let value = tformat!(20, "{:.0} kg", cm.glider_data.water_ballast.to_kg()).unwrap();
                 draw_info(display, cm, "Water Ballast", value.as_str(), None)?;
             }
-            TypeOfInfo::GearAlarm => {
-                draw_alarm_info(display, cm, "Landing Gear", cm.device_const.images.gear)?
-            }
+            TypeOfInfo::GearAlarm => draw_alarm_info(
+                display,
+                cm,
+                "CHECK GEAR",
+                "Landing gear is up",
+                cm.device_const.images.gear,
+            )?,
             TypeOfInfo::None => (),
         };
         Ok(())

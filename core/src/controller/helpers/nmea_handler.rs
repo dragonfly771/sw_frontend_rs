@@ -1,9 +1,19 @@
+//! Serial NMEA port of the display
+//!
+//! Protocol `Larus` (XCSoar, OpenSoar, LK8000): GPS, vario, wind, attitude
+//! and settings out, `$PLARS,H,..` and `$g,..` in.
+//!
+//! Protocol `Lxnav`: the display listens on the PDA/PC port of an LXNAV
+//! main unit - MC, ballast and bugs from
+//! `$LXWP2`, the circling/cruise state from `$PLXVS` - and sends nothing
+//! (the main unit does not take settings from a vario, LXNAV installation
+//! manual 5.2.2.7).
 use crate::{
     controller::{persist, persist::set_vario_mode, Echo},
-    model::{GpsState, VarioModeControl},
+    model::{GpsState, NmeaProtocol, VarioModeControl},
     utils::ParseSlice,
-    CoreController, CoreError, CoreModel, FloatToPressure, FloatToSpeed, PersistenceId, Variant,
-    VarioMode, STANDARD_GRAVITY,
+    CoreController, CoreError, CoreModel, FloatToMass, FloatToPressure, FloatToSpeed,
+    PersistenceId, Variant, VarioMode, STANDARD_GRAVITY,
 };
 use heapless::Vec;
 use tfmt::uwrite;
@@ -25,11 +35,93 @@ impl CoreController {
         // check checksum
         self.nmea_buffer.rx.check()?;
 
-        match self.nmea_buffer.rx.next_chunk()? {
-            b"$PLARS" => self.nmea_parse_plars(cm),
-            b"$g" => self.nmea_parse_g(cm),
-            _ => Err(CoreError::ParseError),
+        let head = self.nmea_buffer.rx.next_chunk()?;
+        match cm.config.nmea_protocol {
+            NmeaProtocol::Larus => match head {
+                b"$PLARS" => self.nmea_parse_plars(cm),
+                b"$g" => self.nmea_parse_g(cm),
+                _ => Err(CoreError::ParseError),
+            },
+            NmeaProtocol::Lxnav => match head {
+                b"$LXWP2" => self.nmea_parse_lxwp2(cm),
+                b"$PLXVS" => self.nmea_parse_plxvs(cm),
+                // GPS, LXWP0/1/3/5, FLARM: not needed, dropped
+                _ => Err(CoreError::ParseError),
+            },
         }
+    }
+
+    /// `$LXWP2,mc,ballast,bugs,polar_a,polar_b,polar_c,volume` of an LXNAV
+    /// main unit: MC in m/s, ballast as overload (total mass / reference
+    /// mass of the polar, 1.0 ..), bugs in percent. Empty fields are
+    /// skipped; a value is only persisted when it differs from the current
+    /// one, the sentence repeats every few seconds.
+    fn nmea_parse_lxwp2(&mut self, cm: &mut CoreModel) -> Result<(), CoreError> {
+        // MC
+        let s = self.nmea_buffer.rx.next_chunk()?;
+        if let Ok(mc) = f32::from_slice(s) {
+            if (0.0..=9.9).contains(&mc) && (mc - cm.config.mc_cready.to_m_s()).abs() >= 0.05 {
+                persist::persist_set(
+                    self,
+                    cm,
+                    Variant::Speed(mc.m_s()),
+                    PersistenceId::McCready,
+                    Echo::Can,
+                );
+            }
+        }
+        // ballast: overload factor -> water ballast of our glider data; the
+        // polar scaling sqrt(mass / reference) then equals the one of the main unit,
+        // whatever the empty and pilot masses are in the two devices
+        let s = self.nmea_buffer.rx.next_chunk()?;
+        if let Ok(overload) = f32::from_slice(s) {
+            if (1.0..=2.0).contains(&overload) {
+                let bgd = &cm.glider_data.basic_glider_data;
+                let total = overload * bgd.reference_weight;
+                let water = (total - bgd.empty_mass - cm.glider_data.pilot_weight.to_kg())
+                    .max(0.0)
+                    .min(bgd.max_ballast);
+                if (water - cm.glider_data.water_ballast.to_kg()).abs() >= 0.5 {
+                    persist::persist_set(
+                        self,
+                        cm,
+                        Variant::Mass(water.kg()),
+                        PersistenceId::WaterBallast,
+                        Echo::Can,
+                    );
+                }
+            }
+        }
+        // bugs in percent (0, 5, 10 ..), our range ends at 50 %
+        let s = self.nmea_buffer.rx.next_chunk()?;
+        if let Ok(bugs) = f32::from_slice(s) {
+            if (0.0..=100.0).contains(&bugs) {
+                let factor = 1.0 + bugs.min(50.0) / 100.0;
+                if (factor - cm.glider_data.bugs()).abs() >= 0.005 {
+                    persist::persist_set(
+                        self,
+                        cm,
+                        Variant::F32(factor),
+                        PersistenceId::Bugs,
+                        Echo::Can,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `$PLXVS,oat,mode,voltage,..`: mode 0 = circling (vario), 1 = cruise
+    /// (speed to fly). Taken over like `$g,s0/s1` from XCSoar, so it needs
+    /// Mode Switch = NMEA.
+    fn nmea_parse_plxvs(&mut self, cm: &mut CoreModel) -> Result<(), CoreError> {
+        let _oat = self.nmea_buffer.rx.next_chunk()?;
+        match self.nmea_buffer.rx.next_chunk()? {
+            b"0" => set_vario_mode(cm, self, VarioMode::Vario, VarioModeControl::Nmea),
+            b"1" => set_vario_mode(cm, self, VarioMode::SpeedToFly, VarioModeControl::Nmea),
+            _ => return Err(CoreError::ParseError),
+        }
+        Ok(())
     }
 
     fn nmea_parse_g(&mut self, cm: &mut CoreModel) -> Result<(), CoreError> {
@@ -132,6 +224,12 @@ impl CoreController {
     }
 
     pub fn nmea_next(&mut self, cm: &mut CoreModel) -> Option<&[u8]> {
+        if cm.config.nmea_protocol == NmeaProtocol::Lxnav {
+            // receive only behind an LXNAV main unit
+            self.nmea_buffer.to_send.clear();
+            self.nmea_buffer.pers_id.clear();
+            return None;
+        }
         if !self.nmea_buffer.pers_id.is_empty() {
             let id = self.nmea_buffer.pers_id.pop_front().unwrap();
             return self.nmea_plars(cm, id);
@@ -299,8 +397,120 @@ impl CoreController {
     }
 }
 
-pub fn nmea_cyclic_200ms(_cm: &mut CoreModel, cc: &mut CoreController) {
+pub fn nmea_cyclic_200ms(cm: &mut CoreModel, cc: &mut CoreController) {
+    // demo values never go to the navigation computer
+    if cm.control.demo.active() {
+        return;
+    }
     cc.nmea_cyclic_200ms();
+}
+
+#[cfg(test)]
+mod lxnav_protocol_tests {
+    use crate::{
+        model::{NmeaProtocol, VarioModeControl},
+        test_harness, FloatToMass, FloatToSpeed, VarioMode,
+    };
+
+    /// the NMEA checksum of the body, as a string "$body*CS\r\n"
+    fn sentence(body: &str) -> heapless::String<90> {
+        let cs = body.bytes().fold(0u8, |a, b| a ^ b);
+        let mut s: heapless::String<90> = heapless::String::new();
+        let _ = tfmt::uwrite!(&mut s, "${}*{:02X}\r\n", body, cs);
+        s
+    }
+
+    fn lx_setup(cm: &mut crate::CoreModel) {
+        cm.config.nmea_protocol = NmeaProtocol::Lxnav;
+        // ASG 29 like test glider: reference 450 kg, empty 280, pilot 90,
+        // max water 121
+        cm.glider_data.basic_glider_data.reference_weight = 450.0;
+        cm.glider_data.basic_glider_data.empty_mass = 280.0;
+        cm.glider_data.basic_glider_data.max_ballast = 121.0;
+        cm.glider_data.pilot_weight = 90.0.kg();
+        cm.glider_data.water_ballast = 0.0.kg();
+        cm.glider_data.set_bugs(1.0);
+        cm.config.mc_cready = 0.0.m_s();
+    }
+
+    #[test]
+    fn lxwp2_sets_mc_ballast_bugs() {
+        let (mut cm, mut cc, _tx) = test_harness!();
+        lx_setup(&mut cm);
+        // overload 1.2 -> 540 kg total -> 170 kg water, capped at 121
+        cc.nmea_recv_slice(
+            &mut cm,
+            sentence("LXWP2,2.5,1.2,10,1.21,-2.13,2.8,50").as_bytes(),
+        );
+        assert!((cm.config.mc_cready.to_m_s() - 2.5).abs() < 0.01);
+        assert!((cm.glider_data.water_ballast.to_kg() - 121.0).abs() < 0.01);
+        assert!((cm.glider_data.bugs() - 1.10).abs() < 0.001);
+        // overload 1.0 -> 450 kg total -> 80 kg water
+        cc.nmea_recv_slice(
+            &mut cm,
+            sentence("LXWP2,0.0,1.0,0,1.21,-2.13,2.8,50").as_bytes(),
+        );
+        assert!((cm.config.mc_cready.to_m_s() - 0.0).abs() < 0.01);
+        assert!((cm.glider_data.water_ballast.to_kg() - 80.0).abs() < 0.01);
+        assert!((cm.glider_data.bugs() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn lxwp2_empty_fields_keep_values() {
+        let (mut cm, mut cc, _tx) = test_harness!();
+        lx_setup(&mut cm);
+        cc.nmea_recv_slice(&mut cm, sentence("LXWP2,1.5,1.1,5,,,,").as_bytes());
+        assert!((cm.config.mc_cready.to_m_s() - 1.5).abs() < 0.01);
+        cc.nmea_recv_slice(&mut cm, sentence("LXWP2,,,,,,,").as_bytes());
+        assert!((cm.config.mc_cready.to_m_s() - 1.5).abs() < 0.01);
+        assert!((cm.glider_data.water_ballast.to_kg() - 125.0_f32.min(121.0)).abs() < 1.0);
+        assert!((cm.glider_data.bugs() - 1.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn lxwp2_ignored_in_larus_protocol() {
+        let (mut cm, mut cc, _tx) = test_harness!();
+        lx_setup(&mut cm);
+        cm.config.nmea_protocol = NmeaProtocol::Larus;
+        cc.nmea_recv_slice(
+            &mut cm,
+            sentence("LXWP2,2.5,1.2,10,1.21,-2.13,2.8,50").as_bytes(),
+        );
+        assert!(cm.config.mc_cready.to_m_s().abs() < 0.01);
+        // and the Larus sentences are not parsed behind an LXNAV main unit
+        cm.config.nmea_protocol = NmeaProtocol::Lxnav;
+        cc.nmea_recv_slice(&mut cm, sentence("PLARS,H,MC,3.0").as_bytes());
+        assert!(cm.config.mc_cready.to_m_s().abs() < 0.01);
+    }
+
+    #[test]
+    fn plxvs_switches_the_mode_with_nmea_control() {
+        let (mut cm, mut cc, _tx) = test_harness!();
+        lx_setup(&mut cm);
+        cm.control.vario_mode_control = VarioModeControl::Nmea;
+        cm.control.vario_mode = VarioMode::Vario;
+        cc.nmea_recv_slice(&mut cm, sentence("PLXVS,23.1,1,12.3,").as_bytes());
+        assert!(cm.control.vario_mode == VarioMode::SpeedToFly);
+        cc.nmea_recv_slice(&mut cm, sentence("PLXVS,,0,,").as_bytes());
+        assert!(cm.control.vario_mode == VarioMode::Vario);
+        // not with the automatic switch
+        cm.control.vario_mode_control = VarioModeControl::Auto;
+        cc.nmea_recv_slice(&mut cm, sentence("PLXVS,23.1,1,12.3,").as_bytes());
+        assert!(cm.control.vario_mode == VarioMode::Vario);
+    }
+
+    #[test]
+    fn nothing_is_sent_behind_an_lx() {
+        let (mut cm, mut cc, _tx) = test_harness!();
+        lx_setup(&mut cm);
+        cc.nmea_cyclic_1s();
+        cc.nmea_cyclic_200ms();
+        cc.nmea_send_config_data(crate::PersistenceId::McCready);
+        assert!(cc.nmea_next(&mut cm).is_none());
+        cm.config.nmea_protocol = NmeaProtocol::Larus;
+        cc.nmea_cyclic_200ms();
+        assert!(cc.nmea_next(&mut cm).is_some());
+    }
 }
 
 /*#[cfg(test)]
@@ -407,7 +617,7 @@ mod tests {
         cm.sensor.average_climb_rate = 1.25.m_s();
         cm.sensor
             .pressure_altitude
-            .set_static_pressure(97_717.0_f32.n_m2());
+            .set_static_pressure(97_717.0_f32.pa());
         cm.sensor.airspeed = AirSpeed::from_tas_at_nn(111.1.km_h());
         let s = cc.nmea_plarv(&mut cm);
         assert_eq!(s, b"$PLARV,2.50,1.25,305,111*5F\r\n");

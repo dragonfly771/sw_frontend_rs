@@ -3,7 +3,7 @@ use corelib::{
     DeviceConst, DisplaySizes, EditMode, HorizonSizes, Images, Misc, Palette, Sizes, VarioSizes,
 };
 use embedded_graphics::geometry::Point;
-use u8g2_fonts::{fonts, FontRenderer};
+use u8g2_fonts::FontRenderer;
 
 pub const DISPLAY_HEIGHT: u32 = 480;
 pub const DISPLAY_WIDTH: u32 = 480;
@@ -23,6 +23,14 @@ pub const DEVICE_CONST: DeviceConst = DeviceConst {
     bright_theme: Palette::default(),
     big_font: BIG_FONT,
     small_font: SMALL_FONT,
+    value_font: VALUE_FONT,
+    value_font_mid: VALUE_FONT_MID,
+    value_font_small: VALUE_FONT_SMALL,
+    caption_font: CAPTION_FONT,
+    header_font: HEADER_FONT,
+    value_font_big: VALUE_FONT_BIG,
+    value_font_big_mid: VALUE_FONT_BIG_MID,
+    caption_font_big: CAPTION_FONT_BIG,
     images: images(),
     sizes: sizes(),
     misc: misc(),
@@ -61,13 +69,14 @@ const fn horizon_sizes() -> HorizonSizes {
         lt_swing_len: (DISPLAY_HEIGHT * 65 / 100) as i32,
         lt_mid: (DISPLAY_HEIGHT * 25 / 100) as i32,
         lt_rad: DISPLAY_WIDTH * 70 / 1000,
+        ring_wp_radius: (DISPLAY_HEIGHT * 5 / 16) as i32,
     }
 }
 
 const fn vario_sizes() -> VarioSizes {
     VarioSizes {
-        stf_diameter: 346,
-        stf_width: 10,
+        stf_diameter: 392, // ring design B3: arc 192..200 (was 346 / 10: 168..178)
+        stf_width: 8,
         indicator_len: 71,
         attention_pos: Point::new(90, 160),
         glider_pos: Point::new(129, 205),
@@ -85,6 +94,19 @@ const fn vario_sizes() -> VarioSizes {
         wind_len: 150,
         wind_len_min: 80,
         scale_factor: 25.0,
+        ring_scale_factor: 36.0,
+        ring_info_top_pos: Point::new(240, 108),
+        ring_info_bottom_pos: Point::new(240, 372),
+        ring_info_r1_pos: Point::new(302, 150),
+        ring_info_r2_pos: Point::new(331, 240),
+        ring_info_r3_pos: Point::new(312, 330),
+        // P1: outer band between "4" and "3" (sketch skizze_status_symbole.png A),
+        // centres at r 221.5 - half way between the scale line (r 203) and the
+        // display edge (r 240), Stefan 28.10.2026 (before r 226 / 227)
+        ring_bat_pos: Point::new(384, 390),
+        ring_sat_pos: Point::new(337, 423),
+        ring_profile_pos: Point::new(128, 288),
+        ring_attention_pos: Point::new(90, 160),
     }
 }
 
@@ -138,10 +160,26 @@ const fn images() -> Images {
         true_course: include_bytes_aligned!(4, "../assets/true_course.lif"),
         wp_editor: include_bytes_aligned!(4, "../assets/wp_editor.lif"),
         wp_horizon: include_bytes_aligned!(4, "../assets/wp_horizon.lif"),
-        wp_vario_5: include_bytes_aligned!(4, "../assets/wp_vario-5.lif"),
-        wp_vario_10: include_bytes_aligned!(4, "../assets/wp_vario-10.lif"),
+        wp_horizon_ring: include_bytes_aligned!(4, "../assets/wp_horizon_ring.lif"),
+        wp_vario360_5: include_bytes_aligned!(4, "../assets/wp_vario360-5.lif"),
+        wp_vario360_10: include_bytes_aligned!(4, "../assets/wp_vario360-10.lif"),
+        wp_vario360_5x: include_bytes_aligned!(4, "../assets/wp_vario360-5x.lif"),
+        wp_vario360_10x: include_bytes_aligned!(4, "../assets/wp_vario360-10x.lif"),
+        sat_small: include_bytes_aligned!(4, "../assets/sat_s.lif"),
+        bat_full_small: include_bytes_aligned!(4, "../assets/bat_full_s.lif"),
+        bat_half_small: include_bytes_aligned!(4, "../assets/bat_half_s.lif"),
+        bat_empty_small: include_bytes_aligned!(4, "../assets/bat_empty_s.lif"),
     }
 }
 
-pub const SMALL_FONT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub25_tf>();
-pub const BIG_FONT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_fub30_tf>();
+pub const SMALL_FONT: FontRenderer = corelib::larus_fonts::TEXT_26;
+pub const VALUE_FONT: FontRenderer = corelib::larus_fonts::VALUE_27;
+pub const VALUE_FONT_MID: FontRenderer = corelib::larus_fonts::VALUE_24;
+pub const VALUE_FONT_SMALL: FontRenderer = corelib::larus_fonts::VALUE_21;
+pub const CAPTION_FONT: FontRenderer = corelib::larus_fonts::TEXT_11;
+pub const HEADER_FONT: FontRenderer = corelib::larus_fonts::TEXT_18;
+pub const BIG_FONT: FontRenderer = corelib::larus_fonts::TEXT_30;
+/// value font of the three large info boxes
+pub const VALUE_FONT_BIG: FontRenderer = corelib::larus_fonts::VALUE_38;
+pub const VALUE_FONT_BIG_MID: FontRenderer = corelib::larus_fonts::VALUE_32;
+pub const CAPTION_FONT_BIG: FontRenderer = corelib::larus_fonts::TEXT_14;

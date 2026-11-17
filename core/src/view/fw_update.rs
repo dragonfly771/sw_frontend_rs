@@ -1,46 +1,25 @@
-use super::viewable::dialog_box::DialogBox;
-use crate::{model::CoreModel, tformat, utils::Colors, CoreError, DeviceEvent, DrawImage};
+use crate::{model::CoreModel, utils::Colors, CoreError, DeviceEvent, DrawImage};
 
 use embedded_graphics::draw_target::DrawTarget;
-use heapless::String;
 
 #[derive(PartialEq)]
-pub struct SwUpdate {
-    text: String<100>,
-}
+pub struct SwUpdate {}
 
 impl SwUpdate {
-    pub fn new(update_state: DeviceEvent) -> SwUpdate {
-        let text = match update_state {
-            DeviceEvent::FwAvailable(_version) => tformat!(100, "Not used"),
-            DeviceEvent::PrepareFwUpload => tformat!(100, "Preparing..."),
-            DeviceEvent::UploadInProgress => {
-                tformat!(100, "Installing...\nDo NOT power\noff device")
-            }
-            _ => tformat!(100, "Error!"),
-        };
-        SwUpdate {
-            text: text.unwrap(),
-        }
+    pub fn new(_update_state: DeviceEvent) -> SwUpdate {
+        SwUpdate {}
     }
 
     pub fn draw<D>(&self, display: &mut D, cm: &CoreModel) -> Result<(), CoreError>
     where
         D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
     {
-        let mut dialog_box = DialogBox::new(
-            "FW Update",
-            cm.palette().list_edit.background,
-            cm.palette().list_edit.header,
-            cm.palette().list_edit.header,
-            cm.palette().list_edit.item,
-        );
-        dialog_box.draw(
-            display,
-            cm.device_const.sizes.display.height,
-            cm.device_const.sizes.display.width,
-            self.text.as_str(),
-            &cm.device_const.big_font,
-        )
+        // progress ring instead of a dialog box
+        let note = match cm.control.firmware_update_state {
+            DeviceEvent::UploadInProgress => "do not power off",
+            DeviceEvent::PrepareFwUpload => "preparing",
+            _ => "",
+        };
+        crate::view::ring_editor::draw_progress(display, cm, "Firmware Update", None, note)
     }
 }

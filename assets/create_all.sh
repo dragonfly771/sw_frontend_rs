@@ -11,4 +11,5 @@ python assets/create_sprite_coords.py
 python assets/create_wallpaper_editor.py
 python assets/create_wallpaper_horizon.py
 python assets/create_wallpaper_vario.py
+python assets/create_small_icons.py
 python assets/convert_pictures.py

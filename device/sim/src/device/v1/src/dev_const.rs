@@ -1,1 +1,0 @@
-../../../../../larus_frontend_v1/src/dev_const.rs

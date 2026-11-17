@@ -43,6 +43,10 @@ features = ["colors_8_indexed", "eeprom_size_8192"]
 [features]
 test-panic = []
 rtic-info = []
+# Large 2.76" display (Z28016) instead of the round series display. Never build this by
+# hand into a series image: use ./make_variant.sh large (own hardware version 1.3.3.0,
+# images are only accepted by devices running the same variant).
+display_large = []
 
 [[bin]]
 name = "vario"

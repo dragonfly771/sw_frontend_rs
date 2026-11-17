@@ -69,8 +69,10 @@ impl Sub for WindVector {
         //println!("gamma {} self {} rhs {}", gamma*180.0/PI, self.angle().to_degrees(), rhs.angle().to_degrees());
         let a = self.speed().to_m_s();
         let b = rhs.speed().to_m_s();
-        let c = (a * a + b * b - 2.0 * a * b * gamma.cos()).sqrt();
-        let alpha = ((b * b + c * c - a * a) / (2.0 * b * c)).acos();
+        // exact root and arc cosine: micromath's were up to 6 % / 0.03 rad off, and its acos
+        // gave NaN (= no difference at all) for parallel winds of different strength
+        let c = crate::utils::math::sqrt(a * a + b * b - 2.0 * a * b * gamma.cos());
+        let alpha = crate::utils::math::acos((b * b + c * c - a * a) / (2.0 * b * c));
 
         if c.is_finite() && alpha.is_finite() {
             let zeta = into_range(if gamma > PI {

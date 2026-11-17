@@ -25,3 +25,17 @@ default = ["colors_8_indexed", "eeprom_size_8192"]
 colors_8_indexed = []
 colors_rgb565 = []
 eeprom_size_8192 = []
+# FLARM traffic, warnings, radar page and the SteFly canopy flasher. Parked for the test
+# versions (Stefan 15.11.2026): without this feature nothing of it shows in a menu, on a
+# page or in the device info, and the controller does not run it. See flarm_feature_parked.md
+flarm = []
+# The FLARM port is tested with its feature: without it the target table is
+# cut down to two entries (flarm::traffic::MAX_TARGETS).
+[[test]]
+name = "flarm"
+path = "tests/flarm.rs"
+required-features = ["flarm"]
+
+[lints.rust]
+# the FLARM port and the flap model can be type checked standalone (tools/)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(flarm_standalone)', 'cfg(flaps_standalone)'] }

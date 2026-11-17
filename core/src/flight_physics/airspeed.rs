@@ -50,7 +50,7 @@ impl AirSpeed {
     pub fn eas(&self, g_force: Acceleration) -> Option<Speed> {
         let g_load = g_force.load();
         if g_load > 0.01 {
-            Some((self.ias.0 / g_load.sqrt()).m_s())
+            Some((self.ias.0 / crate::utils::math::sqrt(g_load)).m_s())
         } else {
             None
         }

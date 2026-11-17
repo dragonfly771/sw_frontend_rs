@@ -8,5 +8,5 @@ mod wind_vector;
 
 pub use airspeed::*;
 pub use athmodphere::*;
-pub use polar::{GliderData, Polar};
+pub use polar::{best_glide, mc_glide, GliderData, Polar};
 pub use wind_vector::*;

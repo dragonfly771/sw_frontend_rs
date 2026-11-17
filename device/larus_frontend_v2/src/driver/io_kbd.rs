@@ -1,5 +1,6 @@
 use crate::driver::QEvents;
-use corelib::{Event, PinState, InputPinState, KeyEvent};
+use corelib::{Event, InputPinState, KeyEvent, PinState};
+use defmt::trace;
 use stm32h7xx_hal::{
     gpio::{Input, Pin},
     pac::{TIM3, TIM5},
@@ -8,7 +9,6 @@ use stm32h7xx_hal::{
         ResetEnable,
     },
 };
-use defmt::trace;
 
 const BTN_ENC: u8 = 0b0001_0000;
 
@@ -93,12 +93,7 @@ pub struct InputPins {
 }
 
 impl InputPins {
-    pub fn new(
-        di1: Pin<'B', 12>,
-        di2: Pin<'B', 13>,
-        di3: Pin<'B', 14>,
-        di4: Pin<'H', 7>,
-    ) -> Self {
+    pub fn new(di1: Pin<'B', 12>, di2: Pin<'B', 13>, di3: Pin<'B', 14>, di4: Pin<'H', 7>) -> Self {
         InputPins {
             di1: di1.into_input(),
             di2: di2.into_input(),
@@ -107,8 +102,6 @@ impl InputPins {
         }
     }
 }
-
-
 
 impl Keyboard {
     /// Create Keys instance and initialize hardware
@@ -180,15 +173,15 @@ impl Keyboard {
             tim_enc_2,
             enc_2_cnt,
 
-            last_btn_state: 0,      // last state of buttons
-            first_go_to_0: false,   // we have to wait, befor we accept new key events
-            tick_cnt: 0,            // tick counter for timing functionality
+            last_btn_state: 0,    // last state of buttons
+            first_go_to_0: false, // we have to wait, befor we accept new key events
+            tick_cnt: 0,          // tick counter for timing functionality
 
             io1_state,
             io2_state,
             io3_state,
             io4_state,
-            io_tick: 0,             // 
+            io_tick: 0, //
 
             q_events, // queue to push key events
         }
@@ -212,25 +205,33 @@ impl Keyboard {
         if state != self.io1_state {
             trace!("in1 {}", state as u32);
             self.io1_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io1(self.io1_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io1(self.io1_state)));
         }
         let state = PinState::from(self.input_pins.di2.is_high());
         if state != self.io2_state {
             trace!("in2 {}", state as u32);
             self.io2_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io2(self.io2_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io2(self.io2_state)));
         }
         let state = PinState::from(self.input_pins.di3.is_high());
         if state != self.io3_state {
             trace!("in3 {}", state as u32);
             self.io3_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io3(self.io3_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io3(self.io3_state)));
         }
         let state = PinState::from(self.input_pins.di4.is_high());
         if state != self.io4_state {
             trace!("in4 {}", state as u32);
             self.io4_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io4(self.io4_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io4(self.io4_state)));
         }
     }
 
@@ -280,9 +281,7 @@ impl Keyboard {
                     // knob is just rotated
                     Event::KeyItem(KeyEvent::Rotary2Right)
                 };
-                let _ = self
-                    .q_events
-                    .enqueue(item);
+                let _ = self.q_events.enqueue(item);
                 delta -= 1;
             }
             while delta < 0 {
@@ -294,9 +293,7 @@ impl Keyboard {
                     // knob is just rotated
                     Event::KeyItem(KeyEvent::Rotary2Left)
                 };
-                let _ = self
-                    .q_events
-                    .enqueue(item);
+                let _ = self.q_events.enqueue(item);
                 delta += 1;
             }
             self.enc_1_cnt = count;
@@ -308,16 +305,12 @@ impl Keyboard {
             let mut delta = count.wrapping_sub(self.enc_2_cnt) as i16;
             while delta > 0 {
                 let item = Event::KeyItem(KeyEvent::Rotary1Right);
-                let _ = self
-                    .q_events
-                    .enqueue(item);
+                let _ = self.q_events.enqueue(item);
                 delta -= 1;
             }
             while delta < 0 {
                 let item = Event::KeyItem(KeyEvent::Rotary1Left);
-                let _ = self
-                    .q_events
-                    .enqueue(item);
+                let _ = self.q_events.enqueue(item);
                 delta += 1;
             }
             self.enc_2_cnt = count;

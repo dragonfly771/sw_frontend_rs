@@ -41,6 +41,8 @@ impl ImageInfo {
 pub struct VersionCheck {
     image_info: ImageInfo,
     hw_version: HwVersion,
+    own_version: SwVersion,
+    allow_downgrade: bool,
 }
 
 impl VersionCheck {
@@ -50,7 +52,15 @@ impl VersionCheck {
         VersionCheck {
             image_info,
             hw_version,
+            own_version: sw_version,
+            allow_downgrade: false,
         }
+    }
+
+    /// Allow selecting an image with an older version too - used for test
+    /// versions; must be enabled by the pilot in the menu (FW Downgrade)
+    pub fn set_allow_downgrade(&mut self, allow: bool) {
+        self.allow_downgrade = allow;
     }
 
     pub fn new_image_name(&self) -> Option<&String<12>> {
@@ -77,7 +87,16 @@ impl VersionCheck {
         if !meta_data.hw_version.is_compatible(&self.hw_version) {
             return;
         }
-        if meta_data.sw_version <= self.image_info.sw_version() {
+        let accept = if self.allow_downgrade {
+            // accept any version that differs from the running one; with
+            // several files on the card the highest version wins
+            meta_data.sw_version != self.own_version
+                && (self.image_info.file_name().is_empty()
+                    || meta_data.sw_version > self.image_info.sw_version())
+        } else {
+            meta_data.sw_version > self.image_info.sw_version()
+        };
+        if !accept {
             return;
         }
         self.image_info.set_file_name(file_name);
@@ -92,6 +111,33 @@ mod tests {
     const SW_VERSION: SwVersion = SwVersion {
         version: [0, 0, 0, 0],
     };
+
+    #[test]
+    fn check_downgrade() {
+        let mut meta_data = MetaDataV1::default();
+        meta_data.magic = 0x1c80_73ab_2085_3579;
+        meta_data.hw_version = HW_VERSION;
+        meta_data.sw_version = SwVersion::from_bytes([0, 9, 0, 0]);
+        let current = SwVersion::from_bytes([1, 0, 0, 0]);
+
+        // blocked by default
+        let mut ulc = VersionCheck::new(HW_VERSION, current);
+        ulc.analyse("old.bin", meta_data.to_bytes());
+        assert_eq!(ulc.new_image_name(), None);
+
+        // allowed with the downgrade switch
+        let mut ulc = VersionCheck::new(HW_VERSION, current);
+        ulc.set_allow_downgrade(true);
+        ulc.analyse("old.bin", meta_data.to_bytes());
+        assert!(ulc.new_image_name().is_some());
+
+        // but never the version that is already running (no install loop)
+        let mut ulc = VersionCheck::new(HW_VERSION, current);
+        ulc.set_allow_downgrade(true);
+        meta_data.sw_version = current;
+        ulc.analyse("same.bin", meta_data.to_bytes());
+        assert_eq!(ulc.new_image_name(), None);
+    }
 
     #[test]
     fn check_magic() {
@@ -138,6 +184,33 @@ mod tests {
         let mut ulc = VersionCheck::new(HW_VERSION, SW_VERSION);
         ulc.analyse("test2.bin", meta_data.to_bytes());
         assert_eq!(ulc.new_image_name().unwrap(), "test2.bin");
+    }
+
+    #[test]
+    fn check_display_variants() {
+        // small round display (1.3.2.x) and large 2.76" display (1.3.3.x) never install
+        // each other's image, in both directions and also with FW Downgrade switched on
+        let small = HwVersion::from_bytes([1, 3, 2, 0]);
+        let large = HwVersion::from_bytes([1, 3, 3, 0]);
+        let mut meta_data = MetaDataV1::default();
+        meta_data.magic = 0x1c80_73ab_2085_3579;
+        meta_data.sw_version = SwVersion::from_bytes([9, 0, 0, 0]);
+
+        for (device, image) in [(small, large), (large, small)] {
+            for downgrade in [false, true] {
+                meta_data.hw_version = image;
+                let mut ulc = VersionCheck::new(device, SW_VERSION);
+                ulc.set_allow_downgrade(downgrade);
+                ulc.analyse("other.bin", meta_data.to_bytes());
+                assert_eq!(ulc.new_image_name(), None);
+            }
+            // the own variant is accepted (a newer patch level of the hardware too)
+            meta_data.hw_version =
+                HwVersion::from_bytes([device.version[0], device.version[1], device.version[2], 7]);
+            let mut ulc = VersionCheck::new(device, SW_VERSION);
+            ulc.analyse("own.bin", meta_data.to_bytes());
+            assert_eq!(ulc.new_image_name().unwrap(), "own.bin");
+        }
     }
 
     #[test]

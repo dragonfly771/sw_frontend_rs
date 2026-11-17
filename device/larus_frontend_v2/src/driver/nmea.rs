@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32h7xx_hal::{
     dma::dma::{Stream1, Stream2},
     gpio::Pin,
@@ -7,6 +8,13 @@ use stm32h7xx_hal::{
 };
 
 const NMEA_BUF_SIZE: usize = 82;
+
+/// baud rate the HAL programs at init; the BRR of that rate is the reference
+/// for every other rate (Setup -> System -> NMEA Port)
+const INIT_BAUD: u32 = 38_400;
+
+/// USART1 BRR as the HAL set it for INIT_BAUD (0 until init)
+static BRR_INIT: AtomicU32 = AtomicU32::new(0);
 
 #[link_section = ".axisram.buffers"]
 static mut TX_BUFFER: [u8; NMEA_BUF_SIZE] = [0_u8; NMEA_BUF_SIZE];
@@ -31,11 +39,14 @@ impl NmeaTxRx {
         let tx = tx.into_alternate();
 
         // init usart with correct settings
-        let _serial = usart1.serial((tx, rx), 38_400.bps(), prec, clocks).unwrap();
+        let _serial = usart1
+            .serial((tx, rx), INIT_BAUD.bps(), prec, clocks)
+            .unwrap();
 
         unsafe {
             // configure usart1
             let usart1 = &(*pac::USART1::ptr());
+            BRR_INIT.store(usart1.brr.read().bits(), Ordering::Relaxed);
             usart1.cr1.modify(|_, w| w.ue().disabled());
             usart1.cr3.modify(|_, w| w.dmat().set_bit()); // dma enable tx dma trigger
             usart1.cr3.modify(|_, w| w.dmar().set_bit()); // dma enable rx dma trigger
@@ -83,6 +94,28 @@ impl NmeaTxRx {
         }
 
         (NmeaTx { is_ready: true }, NmeaRx { head: 0, tail: 0 })
+    }
+
+    /// Reprogram the baud rate (IdleEvent::NmeaBaud). The divisor scales
+    /// with the one the HAL computed for INIT_BAUD (oversampling by 16,
+    /// BRR = f_ck / baud), so no clock constants are needed here. BRR may
+    /// only be written with the USART disabled; the DMA streams keep
+    /// running.
+    pub fn set_baud(baud: u32) {
+        let brr_init = BRR_INIT.load(Ordering::Relaxed);
+        if brr_init == 0 || baud == 0 {
+            return;
+        }
+        let brr = (brr_init as u64 * INIT_BAUD as u64 / baud as u64) as u32;
+        if brr < 16 {
+            return;
+        }
+        unsafe {
+            let usart1 = &(*pac::USART1::ptr());
+            usart1.cr1.modify(|_, w| w.ue().disabled());
+            usart1.brr.write(|w| w.bits(brr));
+            usart1.cr1.modify(|_, w| w.ue().enabled());
+        }
     }
 }
 

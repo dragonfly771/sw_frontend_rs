@@ -9,6 +9,22 @@ pub struct DeviceConst {
     pub bright_theme: Palette,
     pub big_font: FontRenderer,
     pub small_font: FontRenderer,
+    /// Big value font of the ring design info boxes
+    pub value_font: FontRenderer,
+    /// One step smaller value font, used when a value gets 4 or more digits
+    pub value_font_mid: FontRenderer,
+    /// Smaller value font (top box) of the ring design
+    pub value_font_small: FontRenderer,
+    /// Small caption/unit font of the ring design info boxes
+    pub caption_font: FontRenderer,
+    /// Menu/editor header font of the ring design (between caption and small)
+    pub header_font: FontRenderer,
+    /// Value font of the three large info boxes (Big Boxes page core)
+    pub value_font_big: FontRenderer,
+    /// One step smaller, used when the large value would not fit
+    pub value_font_big_mid: FontRenderer,
+    /// Caption/unit font of the large info boxes - used when it fits
+    pub caption_font_big: FontRenderer,
     pub images: Images,
     pub sizes: Sizes,
     pub misc: Misc,
@@ -46,6 +62,9 @@ pub struct HorizonSizes {
     pub lt_swing_len: i32,
     pub lt_mid: i32,
     pub lt_rad: u32,
+    /// radius the scaled horizon wallpaper `wp_horizon_ring` was drawn for.
+    /// 0 = this device has no small horizon wallpaper.
+    pub ring_wp_radius: i32,
 }
 
 pub struct VarioSizes {
@@ -68,6 +87,17 @@ pub struct VarioSizes {
     pub wind_len: i32,
     pub wind_len_min: i32,
     pub scale_factor: f32, // angle in degrees betwenn 0 and the first entry
+    // ring design (full 360 degree scale)
+    pub ring_scale_factor: f32, // angle in degrees per unit, +/- full scale meet at 3 o'clock
+    pub ring_info_top_pos: Point,
+    pub ring_info_bottom_pos: Point,
+    pub ring_info_r1_pos: Point,
+    pub ring_info_r2_pos: Point,
+    pub ring_info_r3_pos: Point,
+    pub ring_bat_pos: Point,
+    pub ring_sat_pos: Point,
+    pub ring_profile_pos: Point,
+    pub ring_attention_pos: Point,
 }
 
 pub struct Images {
@@ -119,8 +149,20 @@ pub struct Images {
     pub true_course: &'static [u8],
     pub wp_editor: &'static [u8],
     pub wp_horizon: &'static [u8],
-    pub wp_vario_5: &'static [u8],
-    pub wp_vario_10: &'static [u8],
+    /// scaled horizon wallpaper for the inner circle of the ring design
+    pub wp_horizon_ring: &'static [u8],
+    pub wp_vario360_5: &'static [u8],
+    pub wp_vario360_10: &'static [u8],
+    /// overrange variants: the numbers of the negative half continue the
+    /// positive scale (6..9 resp. 12..18), shown while the needle is beyond
+    /// full scale
+    pub wp_vario360_5x: &'static [u8],
+    pub wp_vario360_10x: &'static [u8],
+    // small status icons of the ring design
+    pub sat_small: &'static [u8],
+    pub bat_full_small: &'static [u8],
+    pub bat_half_small: &'static [u8],
+    pub bat_empty_small: &'static [u8],
 }
 
 #[derive(PartialEq)]
@@ -213,6 +255,17 @@ pub struct VarioPalette {
     pub mc_cready: Colors,
     pub stf_arc: Colors,
 
+    // ring design indicator colors
+    pub ring_needle: Colors,
+    /// selection / editing in the menus (cursor frame, value field, lists):
+    /// the blue of the pilot-set values, like the MC dot (AC 25-11: selected
+    /// data cyan; orange is too close to the amber of cautions)
+    pub ring_select: Colors,
+    pub ring_avg_climb: Colors,
+    pub ring_mc_cready: Colors,
+    pub ring_wind_fill: Colors,
+    pub ring_avg_wind_fill: Colors,
+
     pub wind_stroke: Colors,
     pub wind_fill: Colors,
     pub avg_wind_stroke: Colors,
@@ -244,6 +297,18 @@ impl VarioPalette {
             mc_cready: Colors::Red,
             stf_arc: Colors::Orange,
 
+            ring_needle: Colors::Orange,
+            ring_select: Colors::SkyK1,
+            ring_avg_climb: Colors::Magenta,
+            // MC in the blue of the pilot-set values (15.11.2026: the dot uses
+            // its own palette entry now, same tone as the wind); the wind blue
+            // (Stefan 28.10.2026: wind belongs to blue) is the sky of the
+            // horizon - softer than DodgerBlue, the orange needle stays first;
+            // the mean wind behind it grey as before P1
+            ring_mc_cready: Colors::SkyK1,
+            ring_wind_fill: Colors::SkyK1,
+            ring_avg_wind_fill: Colors::DarkGray,
+
             wind_stroke: Colors::White,
             wind_fill: Colors::DodgerBlue,
             avg_wind_stroke: Colors::Blue,
@@ -257,7 +322,9 @@ impl VarioPalette {
             therm_ass_best: Colors::Yellow,
             therm_ass_good: Colors::Red,
             therm_ass_bad: Colors::DeepSkyBlue,
-            therm_ass_worst: Colors::Black,
+            // white, not black: a black dot does not show on the black core
+            // (Stefan 15.11.2026)
+            therm_ass_worst: Colors::White,
             therm2_ass_best: Colors::Yellow,
             therm2_ass_good: Colors::Red,
             therm2_ass_bad: Colors::Blue,

@@ -5,14 +5,6 @@
 			"path": "core"
 		},
 		{
-			"name": "air_avionics_ad57",
-			"path": "device/air_avionics_ad57"
-		},
-		{
-			"name": "larus_frontend_v1",
-			"path": "device/larus_frontend_v1"
-		},
-		{
 			"name": "larus_frontend_v2",
 			"path": "device/larus_frontend_v2"
 		},

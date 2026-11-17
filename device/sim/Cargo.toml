@@ -28,8 +28,5 @@ slint-build = "1.12.1"
 path = "../../core"
 
 [features]
-default = ["v2"]
-air = []
-v1 = []
-v2 = []
+default = []
 trace_eeprom = []

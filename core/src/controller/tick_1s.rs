@@ -1,3 +1,4 @@
+use crate::model::{STF_SWITCH_MODE_BALLAST, STF_SWITCH_MODE_FIXED, STF_SWITCH_MODE_POLAR};
 use crate::{
     controller::persist::{persist_set, set_vario_mode},
     model::{GpsState, SystemState, TcrMode, VarioModeControl},
@@ -5,6 +6,8 @@ use crate::{
     CoreController, CoreModel, Echo, FloatToLength, FloatToSpeed, FlyMode, IdleEvent,
     PersistenceId, VarioMode,
 };
+#[allow(unused_imports)]
+use micromath::F32Ext;
 use num::clamp;
 
 pub fn recalc_polar(cm: &mut CoreModel, cc: &mut CoreController) {
@@ -15,7 +18,33 @@ pub fn recalc_polar(cm: &mut CoreModel, cc: &mut CoreController) {
 
 fn speed_to_fly(cm: &mut CoreModel, cc: &mut CoreController) {
     let stf = cc.polar.speed_to_fly(0.0.m_s(), 0.0.m_s());
-    cm.control.speed_to_fly_limit = stf.ias() * cm.control.vario_mode_switch_ratio;
+    let limit = match cm.config.stf_switch_mode {
+        // switch at a fixed, pilot selected IAS - independent of ballast and MC
+        STF_SWITCH_MODE_FIXED => cm.config.stf_switch_speed,
+        // fixed IAS for the dry glider, scaled with the square root of the
+        // actual weight: constant angle of attack, ballast raises the
+        // switch speed correctly, MC never does
+        STF_SWITCH_MODE_BALLAST => {
+            let m_dry =
+                cm.glider_data.basic_glider_data.empty_mass + cm.glider_data.pilot_weight.to_kg();
+            let m_act = m_dry + cm.glider_data.water_ballast.to_kg();
+            if m_dry > 1.0 {
+                cm.config.stf_switch_speed * crate::utils::math::sqrt(m_act / m_dry)
+            } else {
+                cm.config.stf_switch_speed
+            }
+        }
+        // polar based automatic (default): best glide speed plus a margin
+        _ => stf.ias() * cm.control.vario_mode_switch_ratio,
+    };
+    // 5 km/h hysteresis in the fixed modes, so gusts do not toggle the mode
+    cm.control.speed_to_fly_limit = if cm.config.stf_switch_mode != STF_SWITCH_MODE_POLAR
+        && cm.control.vario_mode == VarioMode::SpeedToFly
+    {
+        limit - 5.0.km_h()
+    } else {
+        limit
+    };
 
     // In auto mode switch between Vario and SpeedToFly
     if cm.sensor.airspeed.ias() > cm.control.speed_to_fly_limit
@@ -33,6 +62,12 @@ fn speed_to_fly(cm: &mut CoreModel, cc: &mut CoreController) {
         cc.speed_to_fly_control.vario_mode(),
         VarioModeControl::InputPin,
     );
+
+    // menu mode of a device without a stored one, 10 s after the start
+    cm.control.boot_seconds = cm.control.boot_seconds.saturating_add(1);
+    if cm.control.boot_seconds == 10 {
+        crate::controller::persist::decide_menu_mode(cm, cc);
+    }
 
     // Set 1-second-speed-to-fly value
     cm.calculated.speed_to_fly_1s = cm.calculated.av_speed_to_fly;
@@ -81,6 +116,7 @@ fn speed_to_fly(cm: &mut CoreModel, cc: &mut CoreController) {
                 cm.control.tcr_1s_transient_ticks += 1;
                 if cm.control.tcr_1s_transient_ticks > 30 {
                     cm.control.tcr_mode = TcrMode::StraightFlight;
+                    cm.calculated.thermal_climb_last = cm.calculated.thermal_climb_rate;
                     cm.calculated.thermal_climb_rate = 0.0.m_s();
                 }
             }
@@ -148,6 +184,10 @@ fn can_heartbeat(cm: &mut CoreModel, cc: &mut CoreController) {
     let can_frame = cm.can_frame_hw_fw_version();
     let _ = cc.p_tx_frames.enqueue(can_frame);
 
+    // the sensor box is back: its next loss is told in words again
+    if cm.control.can_devices != 0 {
+        cm.control.no_box_ack = false;
+    }
     // check, if other can devices are visible
     cm.control.system_state = if cm.control.can_devices != 0 {
         match cm.sensor.gps_state {
@@ -176,7 +216,10 @@ fn send_can_nmea(cm: &mut CoreModel, cc: &mut CoreController) {
     let can_frame = cm.can_frame_volt_temp();
     let _ = cc.p_tx_frames.enqueue(can_frame);
 
-    cc.nmea_cyclic_1s();
+    // demo values never go to the navigation computer
+    if !cm.control.demo.active() {
+        cc.nmea_cyclic_1s();
+    }
     let _ = cc.scheduler.chain(process_hardware_pins);
 }
 
@@ -192,15 +235,18 @@ fn process_hardware_pins(cm: &mut CoreModel, cc: &mut CoreController) {
             Echo::NmeaAndCan,
         )
     }
-    let _ = cc.gear_alarm_control.alarm_is_active(cm);
+    crate::controller::gear_alarm::update(cm, cc);
 
-    if let Some(state) = cc.flash_control.tick_1s(cm) {
-        let _ = cc.queue_to_idle_task.enqueue(IdleEvent::Output1(state));
-    }
+    // The plain flash output of the old firmware is replaced by the SteFly
+    // canopy flasher (controller/flarm_ctl.rs, same output DO1).
+    // write changed flap table items, a few per second
+    crate::controller::flaps_ctl::flush_flap_dirty(cm, cc);
     let _ = cc.scheduler.chain(sync_config_items);
 }
 
 fn sync_config_items(cm: &mut CoreModel, cc: &mut CoreController) {
+    // glider settings of a two-seater: hello, and the master repeats them
+    crate::controller::display_sync::tick_1s(cm, cc);
     // Only if frontend is can bus master
     if cm.control.is_can_master {
         // every 3 seconds please
@@ -209,14 +255,6 @@ fn sync_config_items(cm: &mut CoreModel, cc: &mut CoreController) {
             persist_set(cc, cm, bugs, PersistenceId::Bugs, Echo::NmeaAndCan);
             let mc = Variant::F32(cm.config.mc_cready.to_m_s());
             persist_set(cc, cm, mc, PersistenceId::McCready, Echo::NmeaAndCan);
-            let ballast = Variant::F32(cm.glider_data.water_ballast.to_kg());
-            persist_set(
-                cc,
-                cm,
-                ballast,
-                PersistenceId::WaterBallast,
-                Echo::NmeaAndCan,
-            );
             let ballast = Variant::F32(cm.glider_data.water_ballast.to_kg());
             persist_set(
                 cc,

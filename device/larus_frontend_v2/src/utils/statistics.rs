@@ -1,13 +1,13 @@
+use crate::{driver::timestamp_us, DevDuration, DevInstant};
 #[cfg(feature = "rtic-info")]
 use core::fmt::Write;
 use corelib::tformat;
-use crate::{driver::timestamp_us, DevDuration, DevInstant};
 
-use rtt_target::{rtt_init, ChannelMode::BlockIfFull, set_defmt_channel};
+use rtt_target::{rtt_init, set_defmt_channel, ChannelMode::BlockIfFull};
 
+use crate::app;
 #[cfg(feature = "rtic-info")]
 use rtt_target::UpChannel;
-use crate::app;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -42,15 +42,7 @@ impl Task {
 
 // define the task names
 const TASK_NAMES: [&str; TASK_CNT] = [
-    "Sound",
-    "CanRx",
-    "CanTx",
-    "CanTim",
-    "Keybrd",
-    "Control",
-    "View",
-    "NmeaRx",
-    "NmeaTx",
+    "Sound", "CanRx", "CanTx", "CanTim", "Keybrd", "Control", "View", "NmeaRx", "NmeaTx",
 ];
 const TASK_CNT: usize = Task::None as usize;
 
@@ -123,7 +115,7 @@ impl Statistics {
             };
 
             set_defmt_channel(channels.up.0);
-        }    
+        }
         Statistics {
             stats: [stats; TASK_CNT],
             next_show: app::monotonics::now() + DevDuration::secs(1),
@@ -183,10 +175,13 @@ impl Statistics {
             let low_prio_stats = &mut self.stats[low_prio_task_idx];
             low_prio_stats.last_start = now;
         } else if app::monotonics::now() > self.next_show {
-
             #[cfg(feature = "rtic-info")]
-            write!(self.up_channel, "\x1B[2J\x1B[1;15HTask\tCalls/s\tms/s\tµs_max/loop\n").ok();
-            
+            write!(
+                self.up_channel,
+                "\x1B[2J\x1B[1;15HTask\tCalls/s\tms/s\tµs_max/loop\n"
+            )
+            .ok();
+
             let mut workload: u32 = 0;
             for (idx, task_name) in TASK_NAMES.iter().enumerate().take(TASK_CNT) {
                 let stats = &mut self.stats[idx];
@@ -199,13 +194,14 @@ impl Statistics {
 
                 #[allow(unused)]
                 let s = tformat!(
-                    100, 
+                    100,
                     "{}\t{}\t{}\t{}\n",
                     task_name,
                     stats.count / INTERVAL as u32,
                     sum,
                     stats.max_time
-                ).unwrap();
+                )
+                .unwrap();
                 #[cfg(feature = "rtic-info")]
                 write!(self.up_channel, "{}", s.as_str()).ok();
 

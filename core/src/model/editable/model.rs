@@ -1,16 +1,20 @@
 use super::{Content, EditableFuncs, EnumParams, F32Params, ListParams, Params};
 use crate::{
     controller::{
-        Waveform, WAVEFORM_RECTANGULAR, WAVEFORM_SAWTOOTH, WAVEFORM_SINE_WAVE, WAVEFORM_TRIANGULAR,
+        Waveform, SINK_TONE_CONTINUOUS, SINK_TONE_DOUBLE_BEEP, SINK_TONE_OFF, WAVEFORM_RECTANGULAR,
+        WAVEFORM_SAWTOOTH, WAVEFORM_SINE_WAVE, WAVEFORM_TRIANGULAR,
     },
     get_snd_spreading_factor, menu,
     model::{
         config::{
-            UnitHeight, UnitHorizontalSpeed, UnitVerticalSpeed, DEVICE_INFO, HORIZON, UNIT_FEET,
-            UNIT_FPM, UNIT_KMPH, UNIT_KNOTS, UNIT_METER, UNIT_MPH, UNIT_MPS, VARIO,
+            UnitHeight, UnitHorizontalSpeed, UnitVerticalSpeed, BRIGHTNESS_MIN, DEVICE_INFO,
+            HORIZON, SINK_MODE_CONTINUOUS, SINK_MODE_DOUBLE_BEEP, SINK_MODE_OFF,
+            STF_SWITCH_BALLAST, STF_SWITCH_FIXED, STF_SWITCH_MODE_BALLAST, STF_SWITCH_MODE_FIXED,
+            STF_SWITCH_MODE_POLAR, STF_SWITCH_POLAR, UNIT_FEET, UNIT_FPM, UNIT_KMPH, UNIT_KNOTS,
+            UNIT_METER, UNIT_MPH, UNIT_MPS, VARIO,
         },
         control::{DATA_SOURCE_FRONTEND, DATA_SOURCE_SENSORBOX},
-        DataSource, DisplayActive, DisplayTheme,
+        AvgMarker, DataSource, DisplayActive, DisplayTheme, GustFilter, VarioNeedle,
     },
     persist::{self, persist_set},
     polar_store,
@@ -62,7 +66,7 @@ impl EditableFuncs for AlarmVolume {
 pub struct AvgClimbRateSrc;
 impl EditableFuncs for AvgClimbRateSrc {
     fn name() -> &'static str {
-        "Avg Climb Source"
+        "Avg Source"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
@@ -155,6 +159,9 @@ impl EditableFuncs for BatteryLow {
 }
 
 pub struct CenterFrequency;
+
+/// The zero tone frequency. The tables are written for 350 Hz and are stretched onto this
+/// value and the two anchor frequencies, so the semitone spacing of the curve is kept.
 impl EditableFuncs for CenterFrequency {
     fn name() -> &'static str {
         "Center Frequency"
@@ -166,8 +173,8 @@ impl EditableFuncs for CenterFrequency {
 
     fn params(_cm: &CoreModel) -> Params {
         Params::F32(F32Params {
-            min: 500.0,
-            max: 1000.0,
+            min: 250.0,
+            max: 600.0,
             small_inc: 1.0,
             big_inc: 10.0,
             dec_places: 0,
@@ -181,8 +188,623 @@ impl EditableFuncs for CenterFrequency {
                 cc,
                 cm,
                 Variant::F32(val),
-                PersistenceId::CenterFrequency,
-                Echo::Can,
+                PersistenceId::CenterFreqStefly,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SoundFreqUpper;
+impl EditableFuncs for SoundFreqUpper {
+    fn name() -> &'static str {
+        "Upper Frequency"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_freq_upper))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 800.0,
+            max: 3000.0,
+            small_inc: 5.0,
+            big_inc: 50.0,
+            dec_places: 0,
+            unit: "Hz",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SndFreqUpper,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SoundFreqLower;
+impl EditableFuncs for SoundFreqLower {
+    fn name() -> &'static str {
+        "Lower Frequency"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_freq_lower))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 100.0,
+            max: 500.0,
+            small_inc: 1.0,
+            big_inc: 10.0,
+            dec_places: 0,
+            unit: "Hz",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SndFreqLower,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SoundFullScale;
+impl EditableFuncs for SoundFullScale {
+    fn name() -> &'static str {
+        "Full Scale"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_full_scale))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 2.5,
+            max: 10.0,
+            small_inc: 0.1,
+            big_inc: 0.5,
+            dec_places: 1,
+            unit: "m/s",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SndFullScale,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SinkTone;
+impl EditableFuncs for SinkTone {
+    fn name() -> &'static str {
+        "Sink Tone"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        let s = match cm.config.snd_sink_mode {
+            SINK_MODE_OFF => SINK_TONE_OFF,
+            SINK_MODE_CONTINUOUS => SINK_TONE_CONTINUOUS,
+            _ => SINK_TONE_DOUBLE_BEEP,
+        };
+        Content::Enum(TString::<16>::from_str(s))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [
+                SINK_TONE_CONTINUOUS,
+                SINK_TONE_DOUBLE_BEEP,
+                SINK_TONE_OFF,
+                "",
+                "",
+            ],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            let mode = if val.as_str() == SINK_TONE_DOUBLE_BEEP {
+                SINK_MODE_DOUBLE_BEEP
+            } else if val.as_str() == SINK_TONE_OFF {
+                SINK_MODE_OFF
+            } else {
+                SINK_MODE_CONTINUOUS
+            };
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U8(mode),
+                PersistenceId::SinkToneMode,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SinkToneFrom;
+impl EditableFuncs for SinkToneFrom {
+    fn name() -> &'static str {
+        "Sink Tone From"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_sink_from))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: -3.0,
+            max: 0.0,
+            small_inc: 0.1,
+            big_inc: 0.5,
+            dec_places: 1,
+            unit: "m/s",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SinkToneFrom,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct Brightness;
+impl EditableFuncs for Brightness {
+    fn name() -> &'static str {
+        "Brightness"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.display_brightness as f32))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: BRIGHTNESS_MIN as f32,
+            max: 100.0,
+            small_inc: 5.0,
+            big_inc: 20.0,
+            dec_places: 0,
+            unit: "%",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U8(val as u8),
+                PersistenceId::Brightness,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct Qnh;
+impl EditableFuncs for Qnh {
+    fn name() -> &'static str {
+        "QNH"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.sensor.pressure_altitude.qnh().to_hpa()))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 940.0,
+            max: 1070.0,
+            small_inc: 1.0,
+            big_inc: 10.0,
+            dec_places: 0,
+            unit: "hPa",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::Pressure(crate::Pressure::from_hpa(val)),
+                PersistenceId::Qnh,
+                Echo::NmeaAndCan,
+            );
+        }
+    }
+}
+
+pub struct StfSwitchMode;
+impl EditableFuncs for StfSwitchMode {
+    fn name() -> &'static str {
+        "Auto Switch"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        let s = match cm.config.stf_switch_mode {
+            STF_SWITCH_MODE_FIXED => STF_SWITCH_FIXED,
+            STF_SWITCH_MODE_BALLAST => STF_SWITCH_BALLAST,
+            _ => STF_SWITCH_POLAR,
+        };
+        Content::Enum(TString::<16>::from_str(s))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [
+                STF_SWITCH_POLAR,
+                STF_SWITCH_FIXED,
+                STF_SWITCH_BALLAST,
+                "",
+                "",
+            ],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            let mode = if val.as_str() == STF_SWITCH_FIXED {
+                STF_SWITCH_MODE_FIXED
+            } else if val.as_str() == STF_SWITCH_BALLAST {
+                STF_SWITCH_MODE_BALLAST
+            } else {
+                STF_SWITCH_MODE_POLAR
+            };
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U8(mode),
+                PersistenceId::StfSwitchMode,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct StfSwitchSpeed;
+impl EditableFuncs for StfSwitchSpeed {
+    fn name() -> &'static str {
+        "Switch Speed"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        let value = cm
+            .config
+            .unit_horizontal_speed
+            .as_f32(cm.config.stf_switch_speed);
+        Content::F32(Some(value))
+    }
+
+    fn params(cm: &CoreModel) -> Params {
+        let unit = cm.config.unit_horizontal_speed.as_str();
+        Params::F32(F32Params {
+            min: 50.0,
+            max: 200.0,
+            small_inc: 1.0,
+            big_inc: 10.0,
+            dec_places: 0,
+            unit,
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(value)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::Speed(cm.config.unit_horizontal_speed.as_speed(value)),
+                PersistenceId::StfSwitchSpeed,
+                Echo::None,
+            )
+        }
+    }
+}
+
+pub struct FwDowngrade;
+impl EditableFuncs for FwDowngrade {
+    fn name() -> &'static str {
+        "FW Downgrade"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        if cm.config.allow_fw_downgrade {
+            Content::Enum(TString::<16>::from_str(ON))
+        } else {
+            Content::Enum(TString::<16>::from_str(OFF))
+        }
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [OFF, ON, "", "", ""],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            // allows installing an OLDER firmware version from SD card on the
+            // next start - for test versions the customers try out
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::Bool(val.as_str() == ON),
+                PersistenceId::FwDowngrade,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct TicksUntil;
+impl EditableFuncs for TicksUntil {
+    fn name() -> &'static str {
+        "Ticks Until"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_ticks_until))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: -1.0,
+            max: 0.0,
+            small_inc: 0.1,
+            big_inc: 0.5,
+            dec_places: 1,
+            unit: "m/s",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::TicksUntil,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct AudioDamping;
+impl EditableFuncs for AudioDamping {
+    fn name() -> &'static str {
+        "Audio Damping"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_audio_tc))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 0.0,
+            max: 2.0,
+            small_inc: 0.1,
+            big_inc: 0.5,
+            dec_places: 1,
+            unit: "s",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::AudioDamping,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SoundAttack;
+
+/// Attack of the tone envelope, the release is always twice as long - same as in the tone lab.
+///
+/// A tone that starts and stops abruptly is heard as a hard edge even when it is switched at the
+/// zero crossing. A few milliseconds of ramp take that edge away.
+impl EditableFuncs for SoundAttack {
+    fn name() -> &'static str {
+        "Attack"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_attack_ms))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 1.0,
+            max: 30.0,
+            small_inc: 0.5,
+            big_inc: 2.0,
+            dec_places: 1,
+            unit: "ms",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SoundAttack,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct LoudnessComp;
+impl EditableFuncs for LoudnessComp {
+    fn name() -> &'static str {
+        "Loudness Comp"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_loudness_comp * 100.0))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 0.0,
+            max: 150.0,
+            small_inc: 5.0,
+            big_inc: 25.0,
+            dec_places: 0,
+            unit: "%",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val / 100.0),
+                PersistenceId::LoudnessComp,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SpeedVolume;
+impl EditableFuncs for SpeedVolume {
+    fn name() -> &'static str {
+        "Speed Volume"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_speed_vol_slope))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 0.0,
+            max: 3.0,
+            small_inc: 0.1,
+            big_inc: 0.5,
+            dec_places: 1,
+            unit: "dB",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SpeedVolSlope,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct SpeedVolumeRef;
+impl EditableFuncs for SpeedVolumeRef {
+    fn name() -> &'static str {
+        "Speed Reference"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_speed_vol_ref))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 80.0,
+            max: 150.0,
+            small_inc: 1.0,
+            big_inc: 10.0,
+            dec_places: 0,
+            unit: "km/h",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::SpeedVolRef,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct BeepTempo;
+impl EditableFuncs for BeepTempo {
+    fn name() -> &'static str {
+        "Beep Tempo"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.snd_beep_tempo))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 0.6,
+            max: 1.6,
+            small_inc: 0.05,
+            big_inc: 0.2,
+            dec_places: 2,
+            unit: "x",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::F32(val),
+                PersistenceId::BeepTempo,
+                Echo::None,
             );
         }
     }
@@ -329,6 +951,12 @@ impl EditableFuncs for Glider {
     fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
         if let Content::List(sorted_idx) = content {
             let raw_idx = polar_store::to_raw_idx(sorted_idx as usize) as u32;
+            // Taken with a push only, and only another glider (15.11.2026):
+            // a new polar replaces empty mass, max ballast and the polar
+            // points - turning through the list or opening it must not.
+            if !cm.control.editor.enter_pushed || raw_idx == cm.config.glider_idx as u32 {
+                return;
+            }
             persist::persist_set(
                 cc,
                 cm,
@@ -593,7 +1221,7 @@ impl EditableFuncs for Info3Stf {
 pub struct McCready;
 impl EditableFuncs for McCready {
     fn name() -> &'static str {
-        "Mac Cready"
+        "MC"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
@@ -760,7 +1388,7 @@ impl EditableFuncs for StfLowerLimit {
 pub struct TcCircleHysteresis;
 impl EditableFuncs for TcCircleHysteresis {
     fn name() -> &'static str {
-        "TC Circle Hyst"
+        "Circling Delay"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
@@ -794,7 +1422,7 @@ impl EditableFuncs for TcCircleHysteresis {
 pub struct TcClimbRate;
 impl EditableFuncs for TcClimbRate {
     fn name() -> &'static str {
-        "TC Climb Rate"
+        "Avg Time"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
@@ -828,7 +1456,7 @@ impl EditableFuncs for TcClimbRate {
 pub struct TcSpeedToFly;
 impl EditableFuncs for TcSpeedToFly {
     fn name() -> &'static str {
-        "TC Speed to Fly"
+        "StF Time"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
@@ -1146,65 +1774,82 @@ impl EditableFuncs for UsageCode {
 }
 
 pub const USAGE_MODE_CLUB: &str = "Club";
-pub const USAGE_MODE_NORMAL: &str = "Normal";
 pub struct UsageMode;
+pub const USAGE_MODE_BASIC: &str = "Basic";
+pub const USAGE_MODE_EXPERT: &str = "Expert";
 
+/// name of the mode in effect
+pub fn usage_mode(cm: &CoreModel) -> &'static str {
+    if cm.config.club_mode {
+        USAGE_MODE_CLUB
+    } else if cm.config.basic_mode {
+        USAGE_MODE_BASIC
+    } else {
+        USAGE_MODE_EXPERT
+    }
+}
+
+/// Basic (reduced menus, the delivery state), Expert (everything) - both
+/// free to choose - and Club, which needs the code to enter and to leave.
 impl EditableFuncs for UsageMode {
     fn name() -> &'static str {
         "Usage Mode"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
-        if cm.config.club_mode {
-            Content::Enum(TString::<16>::from_str(USAGE_MODE_CLUB))
-        } else {
-            Content::Enum(TString::<16>::from_str(USAGE_MODE_NORMAL))
-        }
+        Content::Enum(TString::<16>::from_str(usage_mode(cm)))
     }
 
     fn params(cm: &CoreModel) -> Params {
-        let variants = if cm.config.usage_code == cm.device_const.misc.sw_version.lower_as_u16() {
-            [USAGE_MODE_NORMAL, USAGE_MODE_CLUB, "", "", ""]
+        let code_ok = cm.config.usage_code == cm.device_const.misc.sw_version.lower_as_u16();
+        let variants = if code_ok {
+            [USAGE_MODE_BASIC, USAGE_MODE_EXPERT, USAGE_MODE_CLUB, "", ""]
+        } else if cm.config.club_mode {
+            [USAGE_MODE_CLUB, "", "", "", ""]
         } else {
-            if cm.config.club_mode {
-                [USAGE_MODE_CLUB, "", "", "", ""]
-            } else {
-                [USAGE_MODE_NORMAL, "", "", "", ""]
-            }
+            [USAGE_MODE_BASIC, USAGE_MODE_EXPERT, "", "", ""]
         };
         Params::Enum(EnumParams { variants })
     }
 
     fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
         if let Content::Enum(val) = content {
-            if cm.control.editor.enter_pushed {
+            if cm.control.editor.enter_pushed && val.as_str() != usage_mode(cm) {
                 let club_mode = val.as_str() == USAGE_MODE_CLUB;
-
-                // Is it necessary to modify the menu system?
-                if club_mode != cm.config.club_mode {
-                    cm.config.club_mode = club_mode;
-                    if club_mode {
-                        // Hard intervention necessary because the menu structure is being changed.
-                        cm.control.menu_control.menu = &menu::club::ADVANCED_SETTINGS;
-                        cm.control.menu_control.pos[2] = 0;
-                        if cm.config.user_profile == 0 {
-                            cm.config.user_profile = 1;
-                            persist::user_profile(cm, cc);
-                        }
-                    } else {
-                        // Hard intervention necessary because the menu structure is being changed.
-                        cm.control.menu_control.menu = &menu::full::ADVANCED_SETTINGS;
-                        cm.control.menu_control.pos[2] = 0;
-                    }
+                let basic_mode = val.as_str() == USAGE_MODE_BASIC;
+                let club_changed = club_mode != cm.config.club_mode;
+                cm.config.club_mode = club_mode;
+                cm.config.basic_mode = basic_mode;
+                // Hard intervention necessary because the menu structure
+                // is being changed: continue in the System menu of the
+                // other list. Without a parent stack, Back uses the
+                // static index and lands in the setup of that list.
+                cm.control.menu_control.menu = if club_mode {
+                    &menu::club::SYSTEM
+                } else if basic_mode {
+                    &menu::basic::SYSTEM
+                } else {
+                    &menu::full::STEFLY_SYSTEM
+                };
+                let level = cm.control.menu_control.menu.level;
+                cm.control.menu_control.pos[level] = 0;
+                cm.control.menu_control.depth = 0;
+                if club_mode && cm.config.user_profile == 0 {
+                    cm.config.user_profile = 1;
+                    persist::user_profile(cm, cc);
                 }
-
-                persist_set(
-                    cc,
-                    cm,
-                    Variant::Bool(club_mode),
-                    PersistenceId::ClubMode,
-                    Echo::None,
-                );
+                if club_changed {
+                    persist_set(
+                        cc,
+                        cm,
+                        Variant::Bool(club_mode),
+                        PersistenceId::ClubMode,
+                        Echo::None,
+                    );
+                }
+                if !club_mode {
+                    persist::store_menu_mode(cm, cc);
+                }
             }
         }
     }
@@ -1273,6 +1918,372 @@ impl EditableFuncs for Waveform_ {
                 cm,
                 Variant::U8(waveform as u8),
                 PersistenceId::Waveform,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct InfoR1;
+impl EditableFuncs for InfoR1 {
+    fn name() -> &'static str {
+        "Ring Info 1 Content"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::List(cm.config.info_r1.sorted_as_i32(Placement::Bottom))
+    }
+
+    fn content_as_str(convert: &mut Convert<20>, idx: i32) {
+        convert
+            .write_str(LineView::from_sorted(idx as usize, Placement::Bottom).name())
+            .unwrap()
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::List(ListParams {
+            max: LineView::max(Placement::Bottom) as i32,
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::List(value) = content {
+            let variant = LineView::from_sorted(value as usize, Placement::Bottom) as i32;
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::I32(variant),
+                PersistenceId::InfoR1,
+                Echo::None,
+            )
+        }
+    }
+}
+
+pub struct InfoR2;
+impl EditableFuncs for InfoR2 {
+    fn name() -> &'static str {
+        "Ring Info 2 Content"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::List(cm.config.info_r2.sorted_as_i32(Placement::Bottom))
+    }
+
+    fn content_as_str(convert: &mut Convert<20>, idx: i32) {
+        convert
+            .write_str(LineView::from_sorted(idx as usize, Placement::Bottom).name())
+            .unwrap()
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::List(ListParams {
+            max: LineView::max(Placement::Bottom) as i32,
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::List(value) = content {
+            let variant = LineView::from_sorted(value as usize, Placement::Bottom) as i32;
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::I32(variant),
+                PersistenceId::InfoR2,
+                Echo::None,
+            )
+        }
+    }
+}
+
+pub struct InfoR3;
+impl EditableFuncs for InfoR3 {
+    fn name() -> &'static str {
+        "Ring Info 3 Content"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::List(cm.config.info_r3.sorted_as_i32(Placement::Bottom))
+    }
+
+    fn content_as_str(convert: &mut Convert<20>, idx: i32) {
+        convert
+            .write_str(LineView::from_sorted(idx as usize, Placement::Bottom).name())
+            .unwrap()
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::List(ListParams {
+            max: LineView::max(Placement::Bottom) as i32,
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::List(value) = content {
+            let variant = LineView::from_sorted(value as usize, Placement::Bottom) as i32;
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::I32(variant),
+                PersistenceId::InfoR3,
+                Echo::None,
+            )
+        }
+    }
+}
+
+pub struct PotK;
+impl EditableFuncs for PotK {
+    fn name() -> &'static str {
+        // AoA factor of the entry optimized needle (Vario Signal). Up to
+        // 0.4.1.47 "POT Factor k": the POT box used it too
+        "Needle Factor k"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.pot_k))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: -1.0,
+            max: 1.0,
+            small_inc: 0.01,
+            big_inc: 0.05,
+            dec_places: 2,
+            unit: "m/s/deg",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(cc, cm, Variant::F32(val), PersistenceId::PotK, Echo::None);
+        }
+    }
+}
+
+pub struct PotBar;
+impl EditableFuncs for PotBar {
+    fn name() -> &'static str {
+        // POT box: bar of the yes / no in percent of the MacCready value
+        "POT Bar"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::F32(Some(cm.config.pot_bar * 100.0))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::F32(F32Params {
+            min: 50.0,
+            max: 150.0,
+            small_inc: 5.0,
+            big_inc: 10.0,
+            dec_places: 0,
+            unit: "% MC",
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::F32(Some(val)) = content {
+            persist::persist_set(cc, cm, Variant::F32(val), PersistenceId::PotBar, Echo::None);
+        }
+    }
+}
+
+pub struct PotAdvice;
+impl EditableFuncs for PotAdvice {
+    fn name() -> &'static str {
+        // POT box: the yes / no symbol (tick, cross)
+        "POT Yes/No"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::Enum(TString::<16>::from_str(if cm.config.pot_advice {
+            ON
+        } else {
+            OFF
+        }))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [ON, OFF, "", "", ""],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::Bool(val.as_str() == ON),
+                PersistenceId::PotAdvice,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct NeedleMode;
+const NEEDLE_STANDARD: &str = "Standard";
+const NEEDLE_OPTIMIZED: &str = "Entry Optimized";
+
+impl EditableFuncs for NeedleMode {
+    fn name() -> &'static str {
+        // applies to the needle AND the audio vario
+        "Vario Signal"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        match cm.config.vario_needle {
+            VarioNeedle::Standard => Content::Enum(TString::<16>::from_str(NEEDLE_STANDARD)),
+            VarioNeedle::EntryOptimized => Content::Enum(TString::<16>::from_str(NEEDLE_OPTIMIZED)),
+        }
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [NEEDLE_STANDARD, NEEDLE_OPTIMIZED, "", "", ""],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            let mode = match val.as_str() {
+                NEEDLE_OPTIMIZED => VarioNeedle::EntryOptimized,
+                _ => VarioNeedle::Standard,
+            };
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U32(mode as u32),
+                PersistenceId::VarioNeedle,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct GustFilterMode;
+const GUST_OFF: &str = "Off";
+const GUST_WEAK: &str = "Weak";
+const GUST_MEDIUM: &str = "Medium";
+const GUST_STRONG: &str = "Strong";
+const GUST_PEAK_CUT: &str = "Peak Cut";
+
+impl EditableFuncs for GustFilterMode {
+    fn name() -> &'static str {
+        // PT2 gust filter, applies to the needle AND the audio vario
+        "Gust Filter"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        let s = match cm.config.gust_filter {
+            GustFilter::Off => GUST_OFF,
+            GustFilter::Weak => GUST_WEAK,
+            GustFilter::Medium => GUST_MEDIUM,
+            GustFilter::Strong => GUST_STRONG,
+            GustFilter::PeakCut => GUST_PEAK_CUT,
+        };
+        Content::Enum(TString::<16>::from_str(s))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [GUST_OFF, GUST_WEAK, GUST_MEDIUM, GUST_STRONG, GUST_PEAK_CUT],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            let mode = match val.as_str() {
+                GUST_WEAK => GustFilter::Weak,
+                GUST_MEDIUM => GustFilter::Medium,
+                GUST_STRONG => GustFilter::Strong,
+                GUST_PEAK_CUT => GustFilter::PeakCut,
+                _ => GustFilter::Off,
+            };
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U32(mode as u32),
+                PersistenceId::GustFilter,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct GustCircling;
+impl EditableFuncs for GustCircling {
+    fn name() -> &'static str {
+        // knee compression of the gust filter while circling too
+        "Gust Circling"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        if cm.config.gust_filter_circling {
+            Content::Enum(TString::<16>::from_str(ON))
+        } else {
+            Content::Enum(TString::<16>::from_str(OFF))
+        }
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [ON, OFF, "", "", ""],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::Bool(val.as_str() == ON),
+                PersistenceId::GustCircling,
+                Echo::None,
+            );
+        }
+    }
+}
+
+pub struct AvgMarkerMode;
+const AVG_MARKER_AVERAGE: &str = "Average";
+const AVG_MARKER_POTENTIAL: &str = "Potential";
+
+impl EditableFuncs for AvgMarkerMode {
+    fn name() -> &'static str {
+        // red triangle on the ring scale: normal average or POT value
+        "Avg Marker"
+    }
+
+    fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        let s = match cm.config.ring_avg_marker {
+            AvgMarker::Average => AVG_MARKER_AVERAGE,
+            AvgMarker::Potential => AVG_MARKER_POTENTIAL,
+        };
+        Content::Enum(TString::<16>::from_str(s))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Enum(EnumParams {
+            variants: [AVG_MARKER_AVERAGE, AVG_MARKER_POTENTIAL, "", "", ""],
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, content: Content) {
+        if let Content::Enum(val) = content {
+            let mode = match val.as_str() {
+                AVG_MARKER_POTENTIAL => AvgMarker::Potential,
+                _ => AvgMarker::Average,
+            };
+            persist::persist_set(
+                cc,
+                cm,
+                Variant::U32(mode as u32),
+                PersistenceId::RingAvgMarker,
                 Echo::None,
             );
         }

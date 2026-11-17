@@ -58,6 +58,10 @@ pub fn size() -> usize {
 }
 
 #[allow(unused)]
+/// glider of a new device (raw index into POLARS): AS 33 18m (Stefan,
+/// 28.10.2026, together with its flap table and the LARUS flap sensor)
+pub const DEFAULT_GLIDER_IDX: i32 = 167;
+
 pub const POLARS: &[BasicGliderData] = &[
     BasicGliderData {
         // No 0,  imported from XCSoar
@@ -1950,5 +1954,15 @@ pub const POLARS: &[BasicGliderData] = &[
         reference_weight: 530.0,
         handicap: 120,
         polar_values: [[100.0, -0.57], [130.0, -0.72], [160.0, -1.03]],
-    }
+    },
 ];
+
+#[cfg(test)]
+mod default_glider_tests {
+    use super::*;
+
+    #[test]
+    fn default_glider_is_the_as33() {
+        assert_eq!(POLARS[DEFAULT_GLIDER_IDX as usize].name, "AS 33 18m");
+    }
+}

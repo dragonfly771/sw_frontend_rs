@@ -1,28 +1,39 @@
 mod calculated;
 mod config;
 mod control;
+pub mod demo;
 mod device;
 mod device_const;
 pub mod device_info;
 pub mod editable;
+pub mod flaps;
+pub mod flarm_cfg;
+pub mod flarm_show;
 pub mod menu;
+pub mod page;
+pub mod page_layout;
 mod sensor;
 
 use crate::flight_physics::{polar_store, GliderData};
 use calculated::Calculated;
+pub use calculated::PotVerdict;
 pub use config::{
-    Config, DisplayActive, DisplayTheme, OverlayActive, TypeOfInfo, UnitHeight,
-    UnitHorizontalSpeed, UnitVerticalSpeed,
+    AvgMarker, Config, DisplayActive, DisplayTheme, GustFilter, NmeaProtocol, OverlayActive,
+    TypeOfInfo, UnitHeight, UnitHorizontalSpeed, UnitVerticalSpeed, VarioNeedle, BRIGHTNESS_MIN,
+    NMEA_BAUDS, NMEA_BAUD_DEFAULT_IDX, NMEA_PROTOCOL_LARUS, NMEA_PROTOCOL_LXNAV,
+    SINK_MODE_CONTINUOUS, SINK_MODE_DOUBLE_BEEP, SINK_MODE_OFF, STF_SWITCH_MODE_BALLAST,
+    STF_SWITCH_MODE_FIXED, STF_SWITCH_MODE_POLAR,
 };
 pub use control::{
-    CirclingDirection, Control, DataSource, EditMode, FlyMode, SystemState, TcrMode, VarioMode,
-    VarioModeControl,
+    CirclingDirection, Control, DataSource, EditMode, FlyMode, PitotCal, PitotCalError,
+    PitotCalState, SystemState, TcrMode, VarioMode, VarioModeControl,
 };
 use device::Device;
 pub use device_const::{
     DeviceConst, DisplaySizes, HorizonSizes, Images, Misc, Palette, Sizes, VarioSizes,
 };
 pub use editable::Editable;
+pub use page::{PageCore, PageFrame, MAX_PAGES};
 pub use sensor::{GpsState, Sensor};
 
 /// Data model for the entire device
@@ -68,7 +79,10 @@ impl CoreModel {
     pub fn reset(&mut self) {
         self.calculated = Calculated::default();
         self.config = Config::default(&self.device_const.dark_theme, self.config.uuid);
+        // the time base runs on (FLARM, flasher and demo keep their timestamps)
+        let now_ms = self.control.now_ms;
         self.control = Control::default();
+        self.control.now_ms = now_ms;
         self.device = Device::default();
         self.glider_data = GliderData::from_basic_glider_data(*polar_store::from_raw_idx(
             self.config.glider_idx as usize,

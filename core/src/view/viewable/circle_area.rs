@@ -1,6 +1,15 @@
-use crate::{model::CoreModel, utils::Colors, CoreError, DrawImage, Image};
+use crate::{
+    model::{CoreModel, EditMode},
+    utils::Colors,
+    CoreError, DrawImage, Image,
+};
 use embedded_graphics::prelude::*;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
+
+/// the ring design draws editors and popups in its own style
+fn is_ring(cm: &CoreModel) -> bool {
+    cm.device_const.misc.edit_mode == EditMode::CircleArea
+}
 
 pub fn draw_info<D>(
     display: &mut D,
@@ -12,6 +21,9 @@ pub fn draw_info<D>(
 where
     D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
 {
+    if is_ring(cm) {
+        return crate::view::ring_editor::draw_editor(display, cm, header, value);
+    }
     display.draw_img(cm.device_const.images.wp_editor, Point::new(0, 0), None)?;
 
     let d_sizes = &cm.device_const.sizes.display;
@@ -45,11 +57,15 @@ pub fn draw_alarm_info<D>(
     display: &mut D,
     cm: &CoreModel,
     header: &str,
+    reason: &str,
     img: &'static [u8],
 ) -> Result<(), CoreError>
 where
     D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
 {
+    if is_ring(cm) {
+        return crate::view::ring_editor::draw_alarm(display, cm, header, reason, img);
+    }
     display.draw_img(cm.device_const.images.wp_editor, Point::new(0, 0), None)?;
 
     let d_sizes = &cm.device_const.sizes.display;

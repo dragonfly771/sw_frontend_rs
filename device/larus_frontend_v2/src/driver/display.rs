@@ -1,4 +1,4 @@
-use super::{FrameBuffer, TBuffer, AVAIL_PIXELS};
+use super::{FrameBuffer, Ltdc, TBuffer, AVAIL_PIXELS};
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use corelib::{Colors, CoreError, DrawImage, Rotation};
 use embedded_graphics::{
@@ -6,6 +6,24 @@ use embedded_graphics::{
 };
 
 const WIDTH_M1: u32 = DISPLAY_WIDTH - 1;
+
+/// The large 2.76" panel (feature "display_large") is mounted turned by 180
+/// degrees relative to the small round one (Stefan 29.10.2026: picture upside
+/// down). The driver adds the 180 degrees itself, so "Rotate 0" in the
+/// Display menu means upright on both displays, the stored setting stays
+/// the same and a factory reset cannot turn the picture back.
+fn panel_rotation(r: Rotation) -> Rotation {
+    if cfg!(feature = "display_large") {
+        match r {
+            Rotation::Rotate0 => Rotation::Rotate180,
+            Rotation::Rotate90 => Rotation::Rotate270,
+            Rotation::Rotate180 => Rotation::Rotate0,
+            Rotation::Rotate270 => Rotation::Rotate90,
+        }
+    } else {
+        r
+    }
+}
 
 pub struct Display {
     buf: TBuffer,
@@ -19,12 +37,18 @@ impl Display {
         Display {
             buf,
             frame_buffer,
-            rotation: Rotation::Rotate0,
+            rotation: panel_rotation(Rotation::Rotate0),
         }
     }
 
+    /// Hand the drawn frame to the LTDC; it appears at the next VSYNC
     pub fn show(&mut self) {
-        self.buf = self.frame_buffer.swap_buffers();
+        self.buf = self.frame_buffer.swap_buffers_nowait();
+    }
+
+    /// true while the last frame has not been taken over yet
+    pub fn reload_pending(&self) -> bool {
+        Ltdc::reload_pending()
     }
 }
 
@@ -147,7 +171,7 @@ impl DrawImage for Display {
     const DISPLAY_WIDTH: u32 = DISPLAY_WIDTH;
 
     fn set_rotation(&mut self, rotation: Rotation) {
-        self.rotation = rotation;
+        self.rotation = panel_rotation(rotation);
     }
 
     unsafe fn draw_line_unchecked(&mut self, idx: usize, len: usize, color: Colors) {

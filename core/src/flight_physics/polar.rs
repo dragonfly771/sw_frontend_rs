@@ -1,5 +1,6 @@
 use crate::flight_physics::{polar_store::BasicGliderData, AirSpeed};
 use crate::system_of_units::{Density, Float, FloatToMass, Mass, Speed};
+use crate::utils::math;
 
 #[allow(unused_imports)]
 use micromath::F32Ext;
@@ -41,24 +42,26 @@ impl GliderData {
         }
     }
 
+    /// Water ballast as fraction of the tank, always a number in 0..1.
+    /// Polars with no water tanks use max_ballast = 0; never divide (NaN/Inf
+    /// on the CAN ballast fraction crashes the sensorbox NMEA formatter, #185).
     pub fn ballast_fraction(&self) -> f32 {
         let max = self.basic_glider_data.max_ballast;
-        // Polars with no water tanks use max_ballast = 0; never divide (NaN/Inf
-        // on the CAN ballast fraction crashes the sensorbox NMEA formatter).
+        let water = self.water_ballast.to_kg();
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(max > 0.0) {
+        if !(max > 0.0) || !water.is_finite() {
             return 0.0;
         }
-        self.water_ballast.to_kg() / max
+        clamp(water / max, 0.0, 1.0)
     }
 
     pub fn set_ballast_fraction(&mut self, fraction: f32) {
-        let max = self.basic_glider_data.max_ballast;
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(max > 0.0) {
-            self.water_ballast = 0.0.kg();
-            return;
-        }
+        let fraction = if fraction.is_finite() {
+            clamp(fraction, 0.0, 1.0)
+        } else {
+            0.0
+        };
+        let max = self.basic_glider_data.max_ballast.max(0.0);
         self.water_ballast = (fraction * max).kg();
     }
 
@@ -147,8 +150,10 @@ impl Polar {
             + glider_data.pilot_weight
             + glider_data.water_ballast)
             .to_kg();
-        let ratio_weight = (weight / self.refer.weight).sqrt();
-        self.density_ratio = (Density::AT_NN().0 / density.to_kg_m3()).sqrt();
+        // exact roots: the micromath one made the polar heavier and the speed to fly
+        // faster than they are (up to 17 km/h, 0.4.1.49)
+        let ratio_weight = math::sqrt(weight / self.refer.weight);
+        self.density_ratio = math::sqrt(Density::AT_NN().0 / density.to_kg_m3());
         let ratio = ratio_weight * self.density_ratio;
 
         self.curr.a = glider_data.bugs * self.refer.a / ratio;
@@ -168,6 +173,44 @@ impl Polar {
         Speed(sink_rate)
     }
 
+    /// Returns the sink rate at a load factor (turn, pull-up)
+    ///
+    /// The polar holds for 1 g. The part of the sink that grows with the lift is taken from
+    /// the polar itself: at best glide half of the sink depends on the lift, so with
+    /// B = -sink(v_bg) * v_bg / 2 the additional sink is B * (n * n - 1) / v. No aspect
+    /// ratio or span is needed (the polar store has none).
+    pub fn sink_rate_g(&self, speed: AirSpeed, load_factor: Float) -> Speed {
+        let sink = self.sink_rate(speed).to_m_s();
+        if self.curr.a >= 0.0 || self.curr.c >= 0.0 {
+            // no polar loaded
+            return Speed(sink);
+        }
+        let v_bg = math::sqrt(self.curr.c / self.curr.a);
+        let w_bg = 2.0 * self.curr.c + self.curr.b * v_bg;
+        let b_lift = -0.5 * w_bg * v_bg;
+        let v_floor = 0.8 * self.curr.v_min;
+        let tas = speed.tas().to_m_s();
+        let v = if tas > v_floor { tas } else { v_floor };
+        Speed(sink - b_lift * (load_factor * load_factor - 1.0) / v)
+    }
+
+    /// Returns the indicated airspeed a glider of the current weight circles at with the
+    /// given load factor: lift coefficient 1.3. Without a wing area 0.83 times best glide.
+    pub fn circling_ias(&self, wing_area_m2: Float, load_factor: Float) -> Speed {
+        const CL_CIRCLE: Float = 1.3;
+        const G: Float = 9.80665;
+        if wing_area_m2 > 1.0 && self.curr.weight > 1.0 {
+            let rho = Density::AT_NN().0;
+            Speed(math::sqrt(
+                2.0 * load_factor * self.curr.weight * G / (rho * wing_area_m2 * CL_CIRCLE),
+            ))
+        } else if self.curr.a < 0.0 && self.curr.c < 0.0 {
+            Speed(0.83 * math::sqrt(self.curr.c / self.curr.a) / self.density_ratio)
+        } else {
+            Speed(25.0)
+        }
+    }
+
     /// Returns the speed for minimal sink
     pub fn min_sink_speed(&self) -> AirSpeed {
         let v = self.clamp_speed(-self.curr.b / self.curr.a / 2.0);
@@ -179,7 +222,7 @@ impl Polar {
     pub fn speed_to_fly(&self, si_met: Speed, st_mc_cready: Speed) -> AirSpeed {
         let (met, mc_cready) = (si_met.to_m_s(), st_mc_cready.to_m_s());
         let val = (self.curr.c + met - mc_cready) / self.curr.a;
-        let stf = if val > 0.0 { val.sqrt() } else { 0.0 };
+        let stf = if val > 0.0 { math::sqrt(val) } else { 0.0 };
         let stf = self.clamp_speed(stf);
         self.airspeed_from_tas(stf)
     }
@@ -213,6 +256,28 @@ impl Polar {
 
 #[cfg(test)]
 mod tests {
+    /// a glider without water tank and an unwritten (NaN) value never give a
+    /// NaN ballast fraction - the sensor box crashes on it (box 0.7.x)
+    #[test]
+    fn ballast_fraction_is_always_a_number() {
+        use crate::system_of_units::FloatToMass;
+        let mut gd = super::GliderData::default();
+        gd.basic_glider_data.max_ballast = 0.0;
+        gd.water_ballast = 0.0.kg();
+        assert_eq!(gd.ballast_fraction(), 0.0);
+        gd.water_ballast = 50.0.kg();
+        assert_eq!(gd.ballast_fraction(), 0.0);
+        gd.basic_glider_data.max_ballast = 100.0;
+        gd.water_ballast = f32::from_bits(0xffff_ffff).kg(); // erased EEPROM
+        assert_eq!(gd.ballast_fraction(), 0.0);
+        gd.water_ballast = 150.0.kg();
+        assert_eq!(gd.ballast_fraction(), 1.0);
+        gd.water_ballast = 25.0.kg();
+        assert!((gd.ballast_fraction() - 0.25).abs() < 1e-6);
+        gd.set_ballast_fraction(f32::NAN);
+        assert_eq!(gd.water_ballast.to_kg(), 0.0);
+    }
+
     use super::*;
     use crate::assert_float_eq;
     use crate::{FloatToDensity, FloatToMass, FloatToSpeed};
@@ -220,7 +285,7 @@ mod tests {
 
     const LS3_GLIDER_DATA: BasicGliderData = BasicGliderData {
         // 0
-        name: "LS-3 WL", // D-2817, erste Winglets
+        name: "LS-3 WL", // first winglets
         wing_area: 10.5,
         max_speed: 270.0,
         empty_mass: 280.0,
@@ -232,7 +297,7 @@ mod tests {
 
     const AS33_GLIDER_DATA: BasicGliderData = BasicGliderData {
         // No 167,  Manufacturer's data interpreted by Andreas Westkamp
-        name: "AS-33 18m",
+        name: "AS 33 18m",
         wing_area: 10.00,
         max_speed: 270.0,
         empty_mass: 285.0,
@@ -450,5 +515,80 @@ mod tests {
             polar.speed_to_fly(0.0.m_s(), 0.0.m_s()).tas().to_km_h(),
             100.2
         );
+    }
+}
+
+/// Best glide ratio and the speed for it (km/h, ISA sea level - IAS = TAS)
+/// with the masses and bugs of `glider_data`; None without a polar
+pub fn best_glide(glider_data: &GliderData) -> Option<(Float, Float)> {
+    if glider_data.basic_glider_data.reference_weight <= 0.0 {
+        return None;
+    }
+    let mut p = Polar::default();
+    p.recalc_glider(glider_data);
+    p.recalc(glider_data, Density::AT_NN());
+    let (a, b, c) = (p.curr.a, p.curr.b, p.curr.c);
+    // L/D = -v / (a v^2 + b v + c) is largest where c = a v^2
+    if a == 0.0 || c / a <= 0.0 {
+        return None;
+    }
+    let v = p.clamp_speed((c / a).sqrt());
+    let sink = v * v * a + v * b + c;
+    if sink >= 0.0 {
+        return None;
+    }
+    Some((-v / sink, v * 3.6))
+}
+
+/// Glide ratio at the speed to fly for `mc` in still air and that speed
+/// (km/h, ISA sea level); for MC 0 it is the best glide
+pub fn mc_glide(
+    glider_data: &GliderData,
+    mc: crate::system_of_units::Speed,
+) -> Option<(Float, Float)> {
+    if glider_data.basic_glider_data.reference_weight <= 0.0 {
+        return None;
+    }
+    let mut p = Polar::default();
+    p.recalc_glider(glider_data);
+    p.recalc(glider_data, Density::AT_NN());
+    let v = p
+        .speed_to_fly(crate::system_of_units::Speed(0.0), mc)
+        .tas()
+        .to_m_s();
+    let sink = p
+        .sink_rate(crate::flight_physics::AirSpeed::new(v, v))
+        .to_m_s();
+    if sink >= 0.0 {
+        return None;
+    }
+    Some((-v / sink, v * 3.6))
+}
+
+#[cfg(test)]
+mod best_glide_tests {
+    use super::*;
+    use crate::flight_physics::polar_store;
+
+    #[test]
+    fn best_glide_of_the_default_glider_is_plausible_and_moves_with_the_ballast() {
+        let mut gd = GliderData::from_basic_glider_data(*polar_store::from_raw_idx(
+            polar_store::DEFAULT_GLIDER_IDX as usize,
+        ));
+        let (e0, v0) = best_glide(&gd).expect("polar");
+        assert!(e0 > 35.0 && e0 < 70.0, "L/D {e0}");
+        assert!(v0 > 80.0 && v0 < 140.0, "speed {v0}");
+        gd.water_ballast = 150.0.kg();
+        let (e1, v1) = best_glide(&gd).unwrap();
+        assert!((e1 - e0).abs() < 0.5, "same L/D with ballast: {e0} {e1}");
+        assert!(v1 > v0 + 3.0, "faster with ballast: {v0} -> {v1}");
+        // MC 0 is the best glide, a higher MC flies faster at a lower L/D
+        let (m0, s0) = mc_glide(&gd, crate::system_of_units::Speed(0.0)).unwrap();
+        assert!(
+            (m0 - e1).abs() < 0.5 && (s0 - v1).abs() < 2.0,
+            "MC 0 {m0}/{s0} vs {e1}/{v1}"
+        );
+        let (m2, s2) = mc_glide(&gd, crate::system_of_units::Speed(2.0)).unwrap();
+        assert!(m2 < m0 && s2 > s0 + 20.0, "MC 2: {m2} at {s2}");
     }
 }

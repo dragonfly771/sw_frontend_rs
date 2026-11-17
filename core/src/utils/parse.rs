@@ -147,14 +147,8 @@ mod tests {
         assert_eq!(f32::from_slice(b"-3.14"), Ok(-3.14));
         assert_eq!(f32::from_slice(b"1.23456"), Ok(1.23456));
         assert_eq!(f32::from_slice(b"-1.23456"), Ok(-1.23456));
-        assert_eq!(
-            f32::from_slice(b"2147483647.0"),
-            Ok(i32::MAX as f32)
-        );
-        assert_eq!(
-            f32::from_slice(b"-2147483647.0"),
-            Ok(-i32::MAX as f32)
-        );
+        assert_eq!(f32::from_slice(b"2147483647.0"), Ok(i32::MAX as f32));
+        assert_eq!(f32::from_slice(b"-2147483647.0"), Ok(-i32::MAX as f32));
         assert_eq!(
             f32::from_slice(b"4294967296.0"),
             Err(crate::CoreError::ParseError)

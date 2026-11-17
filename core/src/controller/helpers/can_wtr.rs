@@ -30,11 +30,19 @@ impl CoreModel {
     }
 
     pub fn can_frame_sound(&self) -> Frame {
+        // The core sequencer of the Stefly profile switches the tone off via `gate`. External
+        // tone generators do not know that flag, so a closed gate is passed on as gain 0 -
+        // which every receiver already understands as "silent" (CAN option A of the concept).
+        let gain = if self.calculated.sound_params.gate {
+            self.calculated.sound_params.gain as u8
+        } else {
+            0
+        };
         Frame::specific(
             CanFrame::empty_from_id(0x00)
                 .push_u16(self.calculated.sound_params.frequency)
                 .push_u16(self.config.snd_duty_cycle)
-                .push_u8(self.calculated.sound_params.gain as u8)
+                .push_u8(gain)
                 .push_u8(if self.calculated.sound_params.continuous {
                     1
                 } else {
@@ -81,10 +89,7 @@ impl CoreModel {
                 LE::write_f32(&mut data[2..6], self.glider_data.bugs());
             }
             CanConfigId::Qnh => {
-                LE::write_f32(
-                    &mut data[2..6],
-                    self.sensor.pressure_altitude.qnh().to_pa(),
-                );
+                LE::write_f32(&mut data[2..6], self.sensor.pressure_altitude.qnh().to_pa());
             }
             CanConfigId::PilotWeight => {
                 LE::write_f32(&mut data[2..6], self.glider_data.pilot_weight.to_kg());
@@ -104,6 +109,11 @@ impl CoreModel {
             }
             _ => return None,
         };
+        // never put a NaN or infinity on the bus: the sensor box (0.7.x)
+        // crashes when it formats one for NMEA
+        if !LE::read_f32(&data[2..6]).is_finite() {
+            return None;
+        }
         Some(Frame::generic(
             CanFrame::empty_from_id(0)
                 .push_u16(config_id as u16)
@@ -112,10 +122,13 @@ impl CoreModel {
         ))
     }
 
+    /// GET request for a sensor box configuration value (content is ignored)
+    /// or SET with the given content
     pub fn can_frame_remote_config(
         &mut self,
         config_id: CanConfigId,
         get_set: RemoteConfig,
+        content: Content,
     ) -> Option<Frame> {
         fn set_content(data: &mut [u8; 6], content: Content, config_id: CanConfigId) -> bool {
             let mut r = false;
@@ -144,7 +157,7 @@ impl CoreModel {
         let available = match get_set {
             RemoteConfig::Set => {
                 data[0] = 1;
-                set_content(&mut data, self.control.editor.content, config_id)
+                set_content(&mut data, content, config_id)
             }
             RemoteConfig::Get => true,
         };

@@ -1,7 +1,8 @@
 use crate::{driver::*, idle_loop::OutputPins, DevController, DevView, IdleLoop, DEVICE_CONST};
 use corelib::{
     basic_config::{MAX_RX_FRAMES, MAX_TX_FRAMES, VDA},
-    spsc_queue, CanDispatch, CoreModel, QIdleEvents, QPersistenceItems, QRxFrames, QTxFrames, QTxIrqFrames,
+    spsc_queue, CanDispatch, CoreModel, QIdleEvents, QPersistenceItems, QRxFrames, QTxFrames,
+    QTxIrqFrames,
 };
 use cortex_m::peripheral::Peripherals as CorePeripherals;
 use defmt::*;
@@ -69,7 +70,7 @@ pub fn hw_init(
         .pll2_r_ck(50.MHz()) // LCD
         .pll3_p_ck(150.MHz())
         .pll3_q_ck(150.MHz())
-        .pll3_r_ck(9.MHz()) // LTDC pixel frequency
+        .pll3_r_ck(PIXEL_CLOCK_HZ.Hz()) // LTDC pixel frequency, depends on the display (ltdc.rs)
         .freeze(pwrcfg, &dp.SYSCFG);
 
     // Enable cortex m7 cache and cyclecounter
@@ -93,9 +94,31 @@ pub fn hw_init(
     let gpioj = dp.GPIOJ.split(ccdr.peripheral.GPIOJ);
     let gpiok = dp.GPIOK.split(ccdr.peripheral.GPIOK);
 
-    // Switch LCD Backlight off
+    // LCD backlight. On the V2 board the dimming PWM input of the backlight
+    // driver is PJ8 (doc/portmapping-v1-v2.ods: "pj8 (dimm-pwm)"); PC6 is
+    // the backlight control line inherited from V1 and is driven as before:
+    // off during startup, on after the firmware update check.
     let mut backlight_control = gpioc.pc6.into_push_pull_output();
     backlight_control.set_high();
+    // PJ8 as TIM8_CH1 (AF3), register level setup - TIM3 is taken by
+    // encoder 2, TIM8_CH1 is free. ARR = 100, so the duty cycle equals the
+    // brightness in percent. Timer clock 200 MHz / 500 / 101 = 4 kHz: inside
+    // the PWM dimming range of the usual backlight drivers (100 Hz .. 20 kHz)
+    // and far above any visible flicker.
+    let _backlight_pwm = gpioj.pj8.into_alternate::<3>();
+    let _ = ccdr.peripheral.TIM8.enable();
+    {
+        let tim = unsafe { &*stm32h7xx_hal::pac::TIM8::ptr() };
+        tim.psc.write(|w| w.psc().bits(499));
+        tim.arr.write(|w| unsafe { w.bits(100) });
+        tim.ccr[0].write(|w| unsafe { w.bits(0) }); // dark during startup
+        tim.ccmr1_output()
+            .modify(|_, w| w.oc1m().bits(0b110).oc1pe().set_bit()); // PWM mode 1
+        tim.ccer.modify(|_, w| w.cc1e().set_bit());
+        tim.bdtr.modify(|_, w| w.moe().set_bit()); // advanced timer: main output enable
+        tim.egr.write(|w| w.ug().set_bit()); // load PSC/ARR before the first cycle
+        tim.cr1.modify(|_, w| w.arpe().set_bit().cen().set_bit());
+    }
 
     // Setup ----------> The front key interface
     let keyboard = {
@@ -103,13 +126,7 @@ pub fn hw_init(
         let input_pins = InputPins::new(gpiob.pb12, gpiob.pb13, gpiob.pb14, gpioh.ph7);
         let enc1_res = Enc1Res::new(ccdr.peripheral.TIM5, dp.TIM5, gpioa.pa0, gpioa.pa1);
         let enc2_res = Enc2Res::new(ccdr.peripheral.TIM3, dp.TIM3, gpiob.pb4.into(), gpioc.pc7);
-        Keyboard::new(
-            keyboard_pins, 
-            input_pins, 
-            enc1_res, 
-            enc2_res, 
-            &Q_EVENTS
-        )
+        Keyboard::new(keyboard_pins, input_pins, enc1_res, enc2_res, &Q_EVENTS)
     };
 
     // Setup ----------> Canbus
@@ -225,8 +242,13 @@ pub fn hw_init(
             &mut dev_controller,
         );
 
-        // switch LCD backlight on, after eventually firmware update (avoids flickering)
+        // switch LCD backlight on, after eventually firmware update (avoids
+        // flickering); full brightness until the stored value is restored
         backlight_control.set_low();
+        {
+            let tim = unsafe { &*stm32h7xx_hal::pac::TIM8::ptr() };
+            tim.ccr[0].write(|w| unsafe { w.bits(100) });
+        }
 
         idle_loop
     };

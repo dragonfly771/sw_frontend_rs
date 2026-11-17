@@ -237,17 +237,27 @@ PICTURES = (
     (4, 'true_course.png', {0: DARK_GRAY, 255: BACKGROUND}),
     (4, 'wp_editor.png', {1: RED, 2: BLACK, 0: BACKGROUND}),
     (4, 'wp_horizon.png', {0: BACKGROUND, 1: WHITE, 2: LIGHT_YELLOW, 3: BLACK}),
-    (4, 'wp_vario-5.png', {0: WHITE, 255: BACKGROUND}),
-    (4, 'wp_vario-10.png', {0: WHITE, 255: BACKGROUND}),
 )
 
-def generate(dim_x, dim_y, src, dst):
+EXTRA_PICTURES_480 = (
+    (4, 'wp_vario360-5.png', {0: WHITE, 255: BACKGROUND}),
+    (4, 'wp_vario360-10.png', {0: WHITE, 255: BACKGROUND}),
+    (4, 'wp_vario360-5x.png', {0: WHITE, 255: BACKGROUND}),
+    (4, 'wp_vario360-10x.png', {0: WHITE, 255: BACKGROUND}),
+    (4, 'sat_s.png', {0: DARK_GRAY, 255: BACKGROUND}),
+    (4, 'bat_empty_s.png', {0: DARK_GRAY, 1: RED, 2: BACKGROUND}),
+    (4, 'bat_full_s.png', {0: DARK_GRAY, 1: LIME, 2: BACKGROUND}),
+    (4, 'bat_half_s.png', {0: DARK_GRAY, 1: GOLD, 2: BACKGROUND}),
+    (4, 'wp_horizon_ring.png', {0: BACKGROUND, 1: WHITE, 2: LIGHT_YELLOW, 3: BLACK}),
+)
+
+def generate(dim_x, dim_y, src, dst, extra=()):
     print(f"Generate '{src}/*.png' -> '{dst}/*.lif'")
     lif_gen = LifGen(dim_x, dim_y, src, dst)
     for params in PICTURES:
         lif_gen.generate(*params)
+    for params in extra:
+        lif_gen.generate(*params)
     print()
 
-generate(227, 285, 'assets/size_227x285', 'device/air_avionics_ad57/assets')
-generate(240, 320, 'assets/size_240x320', 'device/larus_frontend_v1/assets')
-generate(480, 480, 'assets/size_480x480', 'device/larus_frontend_v2/assets')
+generate(480, 480, 'assets/size_480x480', 'device/larus_frontend_v2/assets', EXTRA_PICTURES_480)

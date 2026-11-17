@@ -54,8 +54,6 @@ PICS = [
 ]
 
 EXPORT_DIRS = [
-    ("assets/size_227x285", "85"),
-    ("assets/size_240x320", "85"),
     ("assets/size_480x480", "125"),
 ]
 

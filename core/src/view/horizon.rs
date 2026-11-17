@@ -29,6 +29,13 @@ impl Horizon {
     where
         D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
     {
+        // Stefly design K1 (plan_ring_design_p1.md ch. 8); the former
+        // horizon below stays available with HORIZON_K1 = false
+        if crate::view::HORIZON_K1 {
+            display.clear(Colors::Black)?;
+            let r = cm.device_const.sizes.display.width as f32 / 2.0;
+            return crate::view::horizon_k1::draw_horizon_k1(display, cm, r, true);
+        }
         if cm.sensor.horizon_blocked() {
             display.clear(cm.palette().horizon.sky)?;
             return draw_info(display, cm, "Horizon", "not available", None);

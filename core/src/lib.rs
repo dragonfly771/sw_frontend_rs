@@ -20,6 +20,7 @@ extern crate std;
 /// speaker). An overview of the structure can be found in the doc directory.
 mod common;
 mod controller;
+pub mod flarm;
 pub mod flight_physics;
 pub mod macros;
 mod model;
@@ -31,9 +32,13 @@ mod view;
 pub use controller::persist;
 pub use controller::*;
 pub use model::{
-    menu, CoreModel, DeviceConst, DisplaySizes, EditMode, Editable, FlyMode, HorizonSizes, Images,
-    Misc, Palette, Sizes, VarioMode, VarioSizes,
+    menu, AvgMarker, CoreModel, DataSource, DeviceConst, DisplayActive, DisplaySizes, EditMode,
+    Editable, FlyMode, GustFilter, HorizonSizes, Images, Misc, Palette, PotVerdict, Sizes,
+    SystemState, UnitHeight, UnitHorizontalSpeed, UnitVerticalSpeed, VarioMode, VarioNeedle,
+    VarioSizes,
 };
+pub use view::viewable::centerview::CenterView;
+pub use view::viewable::vario_infoview::{Info3View, LineView};
 pub use view::{CoreView, FRAME_RATE};
 
 // Some helper functionality
@@ -60,6 +65,8 @@ pub mod basic_config {
     pub const SECTION_EDITOR_TIMEOUT: u16 = 4;
     /// Timeout for the menu in seconds to switch back to normal display
     pub const MENU_TIMEOUT: u16 = 30;
+    /// how long the page indicator stays visible after a page change [frames]
+    pub const PAGE_INDICATOR_TICKS: u8 = 40;
     /// Timeout in milliseconds before data is written to the EEPROM or the CAN bus
     pub const PERSISTENCE_TIMEOUT: u16 = 500;
 }

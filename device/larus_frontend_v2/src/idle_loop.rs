@@ -1,11 +1,14 @@
 use defmt::trace;
 
 use crate::{driver::*, install_and_restart, update_available, DevController};
-use corelib::{CIdleEvents, CoreModel, DeviceEvent, Eeprom, Event, IdleEvent, PPersistenceItems, PinState, SdCardCmd};
+use corelib::{
+    CIdleEvents, CoreModel, DeviceEvent, Eeprom, Event, IdleEvent, PPersistenceItems, PinState,
+    SdCardCmd,
+};
 use fugit::ExtU32;
 use stm32h7xx_hal::{
-    gpio::{Output, Pin, PinState::High},
     device::I2C1,
+    gpio::{Output, Pin, PinState::High},
     i2c::{Error as I2cError, I2c},
     independent_watchdog::IndependentWatchdog,
 };
@@ -46,11 +49,20 @@ impl IdleLoop {
         dc: &mut DevController,
     ) -> Self {
         let i2c = I2cManager::new(i2c);
-        let eeprom = Storage::new(i2c).unwrap();
+        let mut eeprom = Storage::new(i2c).unwrap();
         let amplifier = Amplifier::new(I2cManager::clone());
         dc.core().recalc_glider(cm);
 
-        if let Some(version) = update_available() {
+        // the downgrade flag must be read before the eeprom restore in
+        // idle_loop - the update check runs first
+        let mut allow_downgrade = false;
+        for item in eeprom.iter_over(corelib::EepromTopic::ConfigValues) {
+            if item.id == corelib::PersistenceId::FwDowngrade {
+                allow_downgrade = item.to_bool();
+            }
+        }
+
+        if let Some(version) = update_available(allow_downgrade) {
             // When software update is on the way, no watchdog is used
             let event = Event::DeviceItem(DeviceEvent::FwAvailable(version));
             let _ = q_events.enqueue(event);
@@ -76,10 +88,8 @@ impl IdleLoop {
     }
 
     pub fn idle_loop(&mut self) -> ! {
-
         let mut restore_eeprom_items = true;
         loop {
-
             if restore_eeprom_items {
                 // load all PersistencItems from eeprom and push the to application
                 for item in self.eeprom.iter_over(corelib::EepromTopic::ConfigValues) {
@@ -109,6 +119,13 @@ impl IdleLoop {
                     IdleEvent::FeedTheDog => self.watchdog.feed(),
                     IdleEvent::SetGain(gain) => {
                         self.amplifier.set_gain(gain);
+                    }
+                    IdleEvent::SetBacklight(percent) => {
+                        // duty = percent (ARR = 100); the lower limit is
+                        // already enforced in the core
+                        let p = percent.min(100) as u32;
+                        let tim = unsafe { &*stm32h7xx_hal::pac::TIM8::ptr() };
+                        tim.ccr[0].write(|w| unsafe { w.bits(p) });
                     }
                     IdleEvent::SdCardItem(item) => {
                         match item {
@@ -150,6 +167,15 @@ impl IdleLoop {
                             PinState::High => self.output_pins.o2.set_low(),
                             PinState::Low => self.output_pins.o2.set_high(),
                         }
+                    }
+                    IdleEvent::NmeaBaud(baud) => {
+                        // Setup -> System -> NMEA Port; at boot from the EEPROM
+                        NmeaTxRx::set_baud(baud);
+                    }
+                    IdleEvent::FlasherSeq(_seq) => {
+                        // SteFly canopy flasher: the 20 Hz PWM driver on DO1
+                        // (PG2, TIM7 software PWM) follows with the hardware
+                        // interface (plan_flarm_blitzer.md). DO1 stays idle.
                     }
                 }
             }

@@ -39,11 +39,20 @@ pub enum LineView {
     IndicatedAirSpeed,
     EquivalentAirspeed,
     PitchAngle,
+    Altitude,
+    PotentialClimb,
+    /// ring boxes: live wind with an arrow (speed, direction below)
+    WindArrow,
+    /// ring boxes: average wind with an arrow
+    AvgWindArrow,
+    /// mean climb of the thermal since circling began (GNSS height gain / time)
+    ThermalClimb,
     LastElemntNotInUse,
 }
 
 const TOP_LINE_VIEW: &[LineView] = &[
     LineView::None,
+    LineView::Altitude,
     LineView::AverageClimbRate,
     LineView::BankAngle,
     LineView::BatteryVoltage,
@@ -56,8 +65,10 @@ const TOP_LINE_VIEW: &[LineView] = &[
     LineView::Heading,
     LineView::IndicatedAirSpeed,
     LineView::PitchAngle,
+    LineView::PotentialClimb,
     LineView::SlipAngle,
     LineView::SpeedToFly,
+    LineView::ThermalClimb,
     LineView::TrueAirSpeed,
     LineView::TrueCourse,
     LineView::UtcTime,
@@ -65,6 +76,7 @@ const TOP_LINE_VIEW: &[LineView] = &[
 
 const BOTTOM_LINE_VIEW: &[LineView] = &[
     LineView::None,
+    LineView::Altitude,
     LineView::AverageClimbRate,
     LineView::BankAngle,
     LineView::BatteryVoltage,
@@ -77,13 +89,17 @@ const BOTTOM_LINE_VIEW: &[LineView] = &[
     LineView::Heading,
     LineView::IndicatedAirSpeed,
     LineView::PitchAngle,
+    LineView::PotentialClimb,
     LineView::SlipAngle,
     LineView::SpeedToFly,
+    LineView::ThermalClimb,
     LineView::TrueAirSpeed,
     LineView::TrueCourse,
     LineView::UtcTime,
     LineView::WindAndAvgWind,
     LineView::WindAndDelta,
+    LineView::WindArrow,
+    LineView::AvgWindArrow,
 ];
 
 #[derive(Clone, Copy)]
@@ -140,7 +156,10 @@ impl LineView {
     /// Get the name of a viewable
     pub fn name(&self) -> &'static str {
         match self {
-            LineView::AverageClimbRate => "Avg Climb Rate",
+            LineView::Altitude => "Altitude",
+            LineView::PotentialClimb => "POT (experimental)",
+            LineView::ThermalClimb => "Thermal Average",
+            LineView::AverageClimbRate => "Vario Average",
             LineView::DriftAngle => "Drift Angle",
             LineView::FlightLevel => "Flight Level",
             LineView::Heading => "Heading",
@@ -151,6 +170,8 @@ impl LineView {
             LineView::BatteryVoltage => "Battery Voltage",
             LineView::WindAndAvgWind => "Wind, avg Wind",
             LineView::WindAndDelta => "Wind and Delta",
+            LineView::WindArrow => "Wind arrow",
+            LineView::AvgWindArrow => "Avg wind arrow",
             LineView::GLoad => "G-Load",
             LineView::CircleDiameter => "Circle Diameter",
             LineView::CircleMaxMin => "Circle Max-Min",
@@ -171,7 +192,11 @@ impl LineView {
     {
         match self {
             LineView::None => Ok(()),
-            LineView::AverageClimbRate => draw_average_climb_rate(display, cm, pos),
+            LineView::Altitude => draw_altitude(display, cm, pos),
+            LineView::PotentialClimb => draw_potential_climb(display, cm, pos),
+            LineView::AverageClimbRate | LineView::ThermalClimb => {
+                draw_average_climb_rate(display, cm, pos)
+            }
             LineView::DriftAngle => draw_drift_angle(display, cm, pos),
             LineView::FlightLevel => draw_flight_level(display, cm, pos),
             LineView::Heading => draw_heading(display, cm, pos),
@@ -181,7 +206,8 @@ impl LineView {
             LineView::UtcTime => draw_utc_time(display, cm, pos),
             LineView::BatteryVoltage => draw_battery_voltage(display, cm, pos),
             LineView::WindAndAvgWind => draw_wind_and_avg_wind(display, cm, pos),
-            LineView::WindAndDelta => draw_wind_and_delta(display, cm, pos),
+            LineView::WindAndDelta | LineView::WindArrow => draw_wind_and_delta(display, cm, pos),
+            LineView::AvgWindArrow => draw_wind_and_avg_wind(display, cm, pos),
             LineView::GLoad => draw_g_load(display, cm, pos),
             LineView::CircleDiameter => draw_circle_diameter(display, cm, pos),
             LineView::CircleMaxMin => draw_circle_max_min(display, cm, pos),
@@ -232,6 +258,114 @@ where
             let pic_x = txt_x + rectangle.size.width as i32 / 2;
             let pic_y = pos.y - img.height() as i32 / 2;
             img.draw(display, Point::new(pic_x, pic_y), Some(color.vario.unit))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_altitude<D>(display: &mut D, cm: &CoreModel, pos: Point) -> Result<(), CoreError>
+where
+    D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
+{
+    let altitude = cm.sensor.pressure_altitude.qnh_altitude();
+    let s = tformat!(12, "{:.0}", cm.config.unit_height.as_f32(altitude)).unwrap();
+    let img1 = None;
+    let img2 = Some(cm.config.unit_height.image(cm));
+    draw_centered_line(
+        display,
+        pos,
+        img1,
+        s.as_str(),
+        img2,
+        &cm.device_const.big_font,
+        cm.palette(),
+    )
+}
+
+fn draw_potential_climb<D>(display: &mut D, cm: &CoreModel, pos: Point) -> Result<(), CoreError>
+where
+    D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
+{
+    // always a number (flight test feedback): in flight what a circle here
+    // is worth, on the ground the normal average climb like the AVG box.
+    // Magenta while the number is an estimate (straight flight, roll-in,
+    // first circle - pot_predictive), white once the climb is measured
+    let speed = match cm.calculated.pot_climb {
+        Some(speed) => speed,
+        None => cm.sensor.average_climb_rate,
+    };
+    let prognosis = cm.calculated.pot_predictive;
+    let v = cm.config.unit_vertical_speed.value_str(speed);
+    let s = if speed.to_m_s() >= 0.05 {
+        tformat!(12, "+{}", v.as_str()).unwrap()
+    } else {
+        tformat!(12, "{}", v.as_str()).unwrap()
+    };
+    let img2 = Some(cm.config.unit_vertical_speed.image(cm));
+    if prognosis {
+        draw_centered_line_col(
+            display,
+            pos,
+            None,
+            s.as_str(),
+            img2,
+            &cm.device_const.big_font,
+            Colors::Magenta,
+        )
+    } else {
+        draw_centered_line(
+            display,
+            pos,
+            None,
+            s.as_str(),
+            img2,
+            &cm.device_const.big_font,
+            cm.palette(),
+        )
+    }
+}
+
+/// Like `draw_centered_line`, but with an explicit colour for value, symbols
+/// and unit (for the cruise prediction in avionics magenta).
+#[allow(clippy::too_many_arguments)]
+fn draw_centered_line_col<D>(
+    display: &mut D,
+    pos: Point,
+    img1: Option<Image>,
+    content: &str,
+    img2: Option<Image>,
+    font: &FontRenderer,
+    col: Colors,
+) -> Result<(), CoreError>
+where
+    D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
+{
+    let mut txt_x = pos.x;
+    if let Some(img) = img1 {
+        txt_x += img.width() as i32 / 2;
+    }
+    if let Some(img) = img2 {
+        txt_x -= img.width() as i32 / 2;
+    }
+    let result = font.render_aligned(
+        content,
+        Point::new(txt_x, pos.y),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(col),
+        display,
+    )?;
+    if let Some(rectangle) = result {
+        if let Some(img) = img1 {
+            let pic_x = txt_x - (rectangle.size.width / 2 + img.width()) as i32;
+            let pic_y = pos.y - img.height() as i32 / 2;
+            img.draw(display, Point::new(pic_x, pic_y), Some(col))?;
+        }
+        if let Some(img) = img2 {
+            let pic_x = txt_x + rectangle.size.width as i32 / 2;
+            let pic_y = pos.y - img.height() as i32 / 2;
+            img.draw(display, Point::new(pic_x, pic_y), Some(col))?;
         }
     }
 

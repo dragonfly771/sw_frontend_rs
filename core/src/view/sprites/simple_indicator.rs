@@ -16,16 +16,6 @@ pub struct SimpleIndicator {
 }
 
 impl SimpleIndicator {
-    pub const fn at_base(radius: i32, center: Point) -> Self {
-        Self {
-            zero_pos: 0.0,
-            rotation: 0.0,
-            radius,
-            center,
-        }
-    }
-
-    #[allow(unused)]
     pub const fn at_tip(radius: i32, center: Point) -> Self {
         Self {
             zero_pos: 0.0,

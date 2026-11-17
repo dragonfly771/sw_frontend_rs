@@ -1,5 +1,5 @@
 use crate::driver::QEvents;
-use corelib::{Event, PinState, InputPinState, KeyEvent};
+use corelib::{Event, InputPinState, KeyEvent, PinState};
 use stm32h7xx_hal::{
     gpio::{Input, Pin},
     pac::{TIM3, TIM5},
@@ -95,12 +95,7 @@ pub struct InputPins {
 }
 
 impl InputPins {
-    pub fn new(
-        di1: Pin<'B', 12>,
-        di2: Pin<'B', 13>,
-        di3: Pin<'B', 14>,
-        di4: Pin<'H', 7>,
-    ) -> Self {
+    pub fn new(di1: Pin<'B', 12>, di2: Pin<'B', 13>, di3: Pin<'B', 14>, di4: Pin<'H', 7>) -> Self {
         InputPins {
             di1: di1.into_input(),
             di2: di2.into_input(),
@@ -109,8 +104,6 @@ impl InputPins {
         }
     }
 }
-
-
 
 impl Keyboard {
     /// Create Keys instance and initialize hardware
@@ -182,15 +175,15 @@ impl Keyboard {
             tim_enc_2,
             enc_2_cnt,
 
-            last_btn_state: 0,      // last state of buttons
-            first_go_to_0: false,   // we have to wait, befor we accept new key events
-            tick_cnt: 0,            // tick counter for timing functionality
+            last_btn_state: 0,    // last state of buttons
+            first_go_to_0: false, // we have to wait, befor we accept new key events
+            tick_cnt: 0,          // tick counter for timing functionality
 
             io1_state,
             io2_state,
             io3_state,
             io4_state,
-            io_tick: 0,             // 
+            io_tick: 0, //
 
             q_events, // queue to push key events
         }
@@ -213,22 +206,30 @@ impl Keyboard {
         let state = PinState::from(self.input_pins.di1.is_high());
         if state != self.io1_state {
             self.io1_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io1(self.io1_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io1(self.io1_state)));
         }
         let state = PinState::from(self.input_pins.di2.is_high());
         if state != self.io2_state {
             self.io2_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io2(self.io2_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io2(self.io2_state)));
         }
         let state = PinState::from(self.input_pins.di3.is_high());
         if state != self.io3_state {
             self.io3_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io3(self.io3_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io3(self.io3_state)));
         }
         let state = PinState::from(self.input_pins.di4.is_high());
         if state != self.io4_state {
             self.io4_state = state;
-            let _ = self.q_events.enqueue(Event::InputItem(InputPinState::Io4(self.io4_state)));
+            let _ = self
+                .q_events
+                .enqueue(Event::InputItem(InputPinState::Io4(self.io4_state)));
         }
     }
 

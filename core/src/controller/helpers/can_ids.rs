@@ -80,6 +80,32 @@ pub enum CanConfigId {
     CmdTestFunction = 0x3006,
 }
 
+impl CanConfigId {
+    /// Slot in the sensor box value cache (`Sensor::remote`) for the
+    /// configuration values 0x2000..=0x2010, None for local settings and commands
+    pub fn remote_slot(self) -> Option<usize> {
+        let id = self as u16;
+        if (CanConfigId::SensTiltRoll as u16..=CanConfigId::BlockHorizon as u16).contains(&id) {
+            Some((id - CanConfigId::SensTiltRoll as u16) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// The sensor box reads this value only at start-up (sensor orientation
+    /// matrix, GNSS receiver type) - a change needs a restart of the box.
+    /// Antenna geometry, time constants and pitot values are taken over live.
+    pub fn needs_restart(self) -> bool {
+        matches!(
+            self,
+            CanConfigId::SensTiltRoll
+                | CanConfigId::SensTiltPitch
+                | CanConfigId::SensTiltYaw
+                | CanConfigId::GnssConfig
+        )
+    }
+}
+
 impl From<PersistenceId> for CanConfigId {
     fn from(value: PersistenceId) -> Self {
         match value {

@@ -21,19 +21,7 @@ class EditorWallpaper():
     def show(self):
         self.img.show()
 
-DIMS_227_285 = {
-    "width": 227,
-    "height": 285,
-    "diameter": 284,
-    "margin": 39,
-}
 
-DIMS_240_320 = {
-    "width": 240,
-    "height": 320,
-    "diameter": 319,
-    "margin": 45,
-}
 
 DIMS_480_480 = {
     "width": 480,
@@ -43,9 +31,5 @@ DIMS_480_480 = {
 }
 
 print("create_wallpaper_editor.py")
-wp = EditorWallpaper(DIMS_227_285)
-wp.generate("assets/size_227x285/wp_editor.png")
-wp = EditorWallpaper(DIMS_240_320)
-wp.generate("assets/size_240x320/wp_editor.png")
 wp = EditorWallpaper(DIMS_480_480)
 wp.generate("assets/size_480x480/wp_editor.png")

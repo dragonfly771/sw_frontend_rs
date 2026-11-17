@@ -34,6 +34,11 @@ impl CoreController {
         match GenericId::from(frame.generic_id) {
             GenericId::SetSysSetting => {
                 if let Some(value) = rdr.pop_u16() {
+                    // glider settings of the other display of a two-seater
+                    if crate::controller::display_sync::on_frame(self, cm, value, &frame.can_frame)
+                    {
+                        return;
+                    }
                     let config_id = CanConfigId::from(value);
                     self.can_frame_read_sys_config_value(cm, config_id, &frame.can_frame)
                 }
@@ -214,7 +219,9 @@ impl CoreController {
                         cm.sensor.euler_pitch = norm_mpi_ppi(value);
                     }
                     if let Some(value) = rdr.pop_i16() {
-                        cm.sensor.euler_yaw = norm_0_2pi(value);
+                        if !cm.control.demo.flight() {
+                            cm.sensor.euler_yaw = norm_0_2pi(value);
+                        }
                     }
                 }
                 sensor_legacy::ACCELERATION => {
@@ -227,10 +234,18 @@ impl CoreController {
                 }
                 sensor_legacy::AIRSPEED => {
                     if let (Some(tas), Some(ias)) = (rdr.pop_i16(), rdr.pop_i16()) {
-                        cm.sensor.airspeed =
-                            AirSpeed::from_speeds((ias as f32).km_h(), (tas as f32).km_h());
+                        if cm.control.demo.flight() {
+                            // flight demo: keep the real IAS for the safety
+                            // switch-off, the simulated one stays
+                            cm.control.demo_real_ias_kmh = ias as f32;
+                        } else {
+                            cm.sensor.airspeed =
+                                AirSpeed::from_speeds((ias as f32).km_h(), (tas as f32).km_h());
+                        }
                     }
                 }
+                // flight demo: wind, pressure and heading are simulated
+                sensor_legacy::ATHMOSPHERE | sensor_legacy::WIND if cm.control.demo.flight() => (),
                 sensor_legacy::ATHMOSPHERE => {
                     if let Some(value) = rdr.pop_u32() {
                         cm.sensor.pressure = (value as f32).pa();
@@ -298,6 +313,7 @@ impl CoreController {
                         }
                     }
                 }
+                sensor_legacy::TURN_COORD if cm.control.demo.flight() => (),
                 sensor_legacy::TURN_COORD => {
                     if let Some(value) = rdr.pop_i16() {
                         cm.sensor.slip_angle = ((value as f32) * 0.001).rad();
@@ -308,6 +324,10 @@ impl CoreController {
                     if let Some(value) = rdr.pop_i16() {
                         cm.sensor.nick_angle = ((value as f32) * 0.001).rad();
                     }
+                }
+                sensor_legacy::VARIO if cm.control.demo.flight() => {
+                    // flight demo: simulated vario values stay
+                    cm.control.can_devices |= CanActive::SensorboxLegacy as u32;
                 }
                 sensor_legacy::VARIO => {
                     if let Some(value) = rdr.pop_i16() {
@@ -339,6 +359,32 @@ impl CoreController {
 
     fn can_frame_read_sensor_values(&mut self, cm: &mut CoreModel, frame: &SpecificFrame) {
         let mut rdr = frame.can_frame.reader();
+
+        // flight demo (controller/flaps_ctl.rs): airspeed, vario and turn
+        // rate come from the demo; the real IAS is only kept to end the
+        // demo as soon as the glider really flies
+        if cm.control.demo.flight() {
+            match frame.specific_id {
+                sensor::TAS_IAS => {
+                    let _tas = rdr.pop_f32();
+                    if let Some(ias) = rdr.pop_f32() {
+                        cm.control.demo_real_ias_kmh = ias * 3.6;
+                    }
+                    return;
+                }
+                sensor::VARIO_AV_VARIO | sensor::EULER_YAW_TURN_RATE => {
+                    if frame.specific_id == sensor::VARIO_AV_VARIO {
+                        cm.control.can_devices |= CanActive::SensorboxLegacy as u32;
+                    }
+                    return;
+                }
+                // wind, altitude and heading come from the demo, too
+                sensor::WIND_DIR_SPEED | sensor::AV_WIND_DIR_SPEED | sensor::AMB_PRESS_AIR_DENS => {
+                    return
+                }
+                _ => (),
+            }
+        }
 
         match frame.specific_id {
             sensor::EULER_ROLL_NICK => {
@@ -426,24 +472,23 @@ impl CoreController {
                 }
             }
             sensor::CONFIG_VALUE => {
+                // answer to a GET request: goes into the value cache, the open
+                // editor takes it over only if it is the value it works on
                 if let Some(value) = rdr.pop_u32() {
                     let config_id = CanConfigId::from(value as u16);
-                    match config_id {
+                    let content = match config_id {
                         CanConfigId::SensTiltRoll
                         | CanConfigId::SensTiltPitch
-                        | CanConfigId::SensTiltYaw => {
-                            if let Some(rad) = rdr.pop_f32() {
-                                let deg = rad * DEGREE_PER_RAD;
-                                cm.control.editor.content = Content::F32(Some(deg));
-                            }
-                        }
-                        CanConfigId::BlockHorizon => {
-                            if let Some(value) = rdr.pop_u32() {
-                                let date = Date::from_u32(value);
-                                cm.control.editor.content = Content::Date(Some(date));
-                            }
-                        }
-                        _ => cm.control.editor.content = Content::F32(rdr.pop_f32()),
+                        | CanConfigId::SensTiltYaw => rdr
+                            .pop_f32()
+                            .map(|rad| Content::F32(Some(rad * DEGREE_PER_RAD))),
+                        CanConfigId::BlockHorizon => rdr
+                            .pop_u32()
+                            .map(|value| Content::Date(Some(Date::from_u32(value)))),
+                        _ => rdr.pop_f32().map(|val| Content::F32(Some(val))),
+                    };
+                    if let Some(content) = content {
+                        persist::remote_value_received(cm, config_id, content);
                     }
                 }
             }

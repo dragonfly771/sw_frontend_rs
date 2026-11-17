@@ -1,4 +1,5 @@
 mod controller;
+mod flaps_flarm;
 mod glider_data;
 /// Elements that can be changed by the user
 ///
@@ -16,12 +17,18 @@ mod glider_data;
 ///   - Add reference to fn Editable::this()
 ///   - Add the new editable to the menu structure (src/model/menu)
 mod model;
+mod page;
 mod sensorbox;
+pub mod simple;
 
 use controller::*;
+use flaps_flarm::*;
 use glider_data::*;
 use model::*;
+use page::*;
 use sensorbox::*;
+pub use sensorbox::{REMOTE_RESTART, REMOTE_SAVE};
+use simple::*;
 
 use crate::{utils::TString, CoreController, CoreModel, Date};
 use tfmt::Convert;
@@ -46,14 +53,43 @@ pub enum Editable {
     Info1Stf,
     Info2Stf,
     Info3Stf,
+    InfoR1,
+    InfoR2,
+    InfoR3,
+    PotK,
+    PotBar,
+    PotAdvice,
+    NeedleMode,
+    GustFilterMode,
+    GustCircling,
+    AvgMarkerMode,
     McCready,
     SoundSpreading,
     StfUpperLimit,
+    StfSwitchMode,
+    StfSwitchSpeed,
+    FwDowngrade,
+    Brightness,
+    Qnh,
+    BigEncoder,
+
     StfLowerLimit,
     TcCircleHysteresis,
     TcClimbRate,
     TcSpeedToFly,
     Theme,
+    SoundFreqUpper,
+    SoundFreqLower,
+    SoundFullScale,
+    SinkTone,
+    SinkToneFrom,
+    TicksUntil,
+    AudioDamping,
+    SoundAttack,
+    LoudnessComp,
+    SpeedVolume,
+    SpeedVolumeRef,
+    BeepTempo,
     VarioUpperLimit,
     VarioLowerLimit,
     UnitHeight,
@@ -80,6 +116,10 @@ pub enum Editable {
     SpeedToFlyPinConfig,
     UserProfile,
     VarioModeControl,
+    /// opens the device info page (firmware versions, sensor box state)
+    DeviceInfo,
+    /// flight menu: page layout editor on the page itself
+    PageLayout,
 
     // glider_data
     Bugs,
@@ -100,9 +140,13 @@ pub enum Editable {
     SensTiltPitch,
     SensTiltYaw,
     PitotOffset,
+    PitotOffsetMeasure,
     PitotSpan,
     QnhDelta,
     VarioTc,
+    VarioIntTc,
+    WindTc,
+    MeanWindTc,
     GnssConfig,
     AntBaselen,
     AntSlaveDown,
@@ -116,7 +160,42 @@ pub enum Editable {
     CmdResetSensorbox,
     CmdTestFunction,
     CmdTestFunctionNumber,
+    /// dialogs of the sensor box settings: save old -> new?, restart the box?
+    RemoteSave,
+    RemoteRestart,
 
+    // flaps, FLARM, canopy flasher, demo (flaps_flarm.rs)
+    FlarmStatus,
+    FlarmBaud,
+    /// serial NMEA port (flaps_flarm.rs)
+    NmeaProtocolSel,
+    NmeaBaudSel,
+    FlasherTypeSel,
+    FlasherActiveSel,
+    FlashRateSel,
+    FlasherOnSpeed,
+    FlasherTest,
+    WarnViewSel,
+    WarnLevelSel,
+    HeadOnSel,
+    DemoSel,
+    FlapSensorSel,
+    FlapSensorValue,
+    FlapCircling,
+    FlapAdd,
+    FlapName,
+    FlapUpTo,
+    FlapFrom,
+    FlapPosition,
+    FlapSetPos,
+    FlapDelete,
+
+    // simple operation (simple.rs)
+    VarioResponse,
+    CruiseSwitch,
+    SoundPreset,
+    PageStyle,
+    SetupWizard,
     // general
     None,
     Return,
@@ -235,7 +314,7 @@ impl EditableFuncs for None_ {
 struct Return;
 impl EditableFuncs for Return {
     fn name() -> &'static str {
-        "Return"
+        "Back"
     }
 }
 
@@ -259,14 +338,43 @@ impl Editable {
             Editable::Info1Stf => Info1Stf::this(),
             Editable::Info2Stf => Info2Stf::this(),
             Editable::Info3Stf => Info3Stf::this(),
+            Editable::InfoR1 => InfoR1::this(),
+            Editable::InfoR2 => InfoR2::this(),
+            Editable::InfoR3 => InfoR3::this(),
+            Editable::PotK => PotK::this(),
+            Editable::PotBar => PotBar::this(),
+            Editable::PotAdvice => PotAdvice::this(),
+            Editable::NeedleMode => NeedleMode::this(),
+            Editable::GustFilterMode => GustFilterMode::this(),
+            Editable::GustCircling => GustCircling::this(),
+            Editable::AvgMarkerMode => AvgMarkerMode::this(),
             Editable::McCready => McCready::this(),
             Editable::SoundSpreading => SoundSpreading::this(),
             Editable::StfUpperLimit => StfUpperLimit::this(),
+            Editable::StfSwitchMode => StfSwitchMode::this(),
+            Editable::StfSwitchSpeed => StfSwitchSpeed::this(),
+            Editable::FwDowngrade => FwDowngrade::this(),
+            Editable::Brightness => Brightness::this(),
+            Editable::Qnh => Qnh::this(),
+            Editable::BigEncoder => BigEncoder::this(),
+
             Editable::StfLowerLimit => StfLowerLimit::this(),
             Editable::TcCircleHysteresis => TcCircleHysteresis::this(),
             Editable::TcClimbRate => TcClimbRate::this(),
             Editable::TcSpeedToFly => TcSpeedToFly::this(),
             Editable::Theme => Theme::this(),
+            Editable::SoundFreqUpper => SoundFreqUpper::this(),
+            Editable::SoundFreqLower => SoundFreqLower::this(),
+            Editable::SoundFullScale => SoundFullScale::this(),
+            Editable::SinkTone => SinkTone::this(),
+            Editable::SinkToneFrom => SinkToneFrom::this(),
+            Editable::TicksUntil => TicksUntil::this(),
+            Editable::AudioDamping => AudioDamping::this(),
+            Editable::SoundAttack => SoundAttack::this(),
+            Editable::LoudnessComp => LoudnessComp::this(),
+            Editable::SpeedVolume => SpeedVolume::this(),
+            Editable::SpeedVolumeRef => SpeedVolumeRef::this(),
+            Editable::BeepTempo => BeepTempo::this(),
             Editable::VarioUpperLimit => VarioUpperLimit::this(),
             Editable::VarioLowerLimit => VarioLowerLimit::this(),
             Editable::UnitHeight => UnitHeigth_::this(),
@@ -293,6 +401,8 @@ impl Editable {
             Editable::SpeedToFlyPinConfig => SpeedToFlyPinConfig::this(),
             Editable::UserProfile => UserProfile::this(),
             Editable::VarioModeControl => VarioModeControl_::this(),
+            Editable::DeviceInfo => DeviceInfo::this(),
+            Editable::PageLayout => PageLayout::this(),
 
             // glider_data
             Editable::Bugs => Bugs::this(),
@@ -313,9 +423,13 @@ impl Editable {
             Editable::SensTiltPitch => SensTiltPitch::this(),
             Editable::SensTiltYaw => SensTiltYaw::this(),
             Editable::PitotOffset => PitotOffset::this(),
+            Editable::PitotOffsetMeasure => PitotOffsetMeasure::this(),
             Editable::PitotSpan => PitotSpan::this(),
             Editable::QnhDelta => QnhDelta::this(),
             Editable::VarioTc => VarioTc::this(),
+            Editable::VarioIntTc => VarioIntTc::this(),
+            Editable::WindTc => WindTc::this(),
+            Editable::MeanWindTc => MeanWindTc::this(),
             Editable::GnssConfig => GnssConfig::this(),
             Editable::AntBaselen => AntBaselen::this(),
             Editable::AntSlaveDown => AntSlaveDown::this(),
@@ -330,9 +444,67 @@ impl Editable {
             Editable::CmdTestFunction => CmdTestFunction::this(),
             Editable::CmdTestFunctionNumber => CmdTestFunctionNumber::this(),
 
+            Editable::RemoteSave => RemoteSave::this(),
+            Editable::RemoteRestart => RemoteRestart::this(),
+
+            // flaps, FLARM, canopy flasher, demo
+            Editable::FlarmStatus => FlarmStatus::this(),
+            Editable::FlarmBaud => FlarmBaud::this(),
+            Editable::NmeaProtocolSel => NmeaProtocolSel::this(),
+            Editable::NmeaBaudSel => NmeaBaudSel::this(),
+            Editable::FlasherTypeSel => FlasherTypeSel::this(),
+            Editable::FlasherActiveSel => FlasherActiveSel::this(),
+            Editable::FlashRateSel => FlashRateSel::this(),
+            Editable::FlasherOnSpeed => FlasherOnSpeed::this(),
+            Editable::FlasherTest => FlasherTest::this(),
+            Editable::WarnViewSel => WarnViewSel::this(),
+            Editable::WarnLevelSel => WarnLevelSel::this(),
+            Editable::HeadOnSel => HeadOnSel::this(),
+            Editable::DemoSel => DemoSel::this(),
+            Editable::FlapSensorSel => FlapSensorSel::this(),
+            Editable::FlapSensorValue => FlapSensorValue::this(),
+            Editable::FlapCircling => FlapCircling::this(),
+            Editable::FlapAdd => FlapAdd::this(),
+            Editable::FlapName => FlapName::this(),
+            Editable::FlapUpTo => FlapUpTo::this(),
+            Editable::FlapFrom => FlapFrom::this(),
+            Editable::FlapPosition => FlapPosition::this(),
+            Editable::FlapSetPos => FlapSetPos::this(),
+            Editable::FlapDelete => FlapDelete::this(),
+
             // general
             Editable::None => None_::this(),
+            Editable::VarioResponse => VarioResponse::this(),
+            Editable::CruiseSwitch => CruiseSwitch::this(),
+            Editable::SoundPreset => SoundPreset::this(),
+            Editable::PageStyle => PageStyle::this(),
+            Editable::SetupWizard => SetupWizard::this(),
             Editable::Return => Return::this(),
+        }
+    }
+
+    /// The sensor box configuration value behind this editable, if any.
+    /// These values are not stored in the frontend but requested from and
+    /// written to the sensor box over CAN.
+    pub fn remote_config_id(&self) -> Option<crate::CanConfigId> {
+        use crate::CanConfigId;
+        match self {
+            Editable::SensTiltRoll => Some(CanConfigId::SensTiltRoll),
+            Editable::SensTiltPitch => Some(CanConfigId::SensTiltPitch),
+            Editable::SensTiltYaw => Some(CanConfigId::SensTiltYaw),
+            Editable::PitotOffset => Some(CanConfigId::PitotOffset),
+            Editable::PitotSpan => Some(CanConfigId::PitotSpan),
+            Editable::QnhDelta => Some(CanConfigId::QnhDelta),
+            Editable::VarioTc => Some(CanConfigId::VarioTc),
+            Editable::VarioIntTc => Some(CanConfigId::VarioIntTc),
+            Editable::WindTc => Some(CanConfigId::WindTc),
+            Editable::MeanWindTc => Some(CanConfigId::MeanWindTc),
+            Editable::GnssConfig => Some(CanConfigId::GnssConfig),
+            Editable::AntBaselen => Some(CanConfigId::AntBaselen),
+            Editable::AntSlaveDown => Some(CanConfigId::AntSlaveDown),
+            Editable::AntSlaveRight => Some(CanConfigId::AntSlaveRight),
+            Editable::BlockHorizon => Some(CanConfigId::BlockHorizon),
+            _ => None,
         }
     }
 
@@ -365,16 +537,32 @@ impl Editable {
             }
             Params::F32(params) => {
                 if let Content::F32(opt_val) = content {
-                    conv.write_str(params.unit).unwrap();
-                    conv.write_u8(b' ').unwrap();
-                    if let Some(val) = opt_val {
+                    // the converter fills from the right: unit, blank, number
+                    if let (Editable::GnssConfig, Some(val)) = (*self, opt_val) {
+                        // the product instead of the number (Stefan 09.11.2026)
+                        conv.write_str(sensorbox::gnss_config_name(val)).unwrap();
+                    } else if let Some(val) = opt_val {
+                        conv.write_str(params.unit).unwrap();
+                        // "65.4°" like the sketches, other units with a blank
+                        if params.unit != "°" {
+                            conv.write_u8(b' ').unwrap();
+                        }
                         conv.f32(val, params.dec_places as usize).unwrap();
+                    } else {
+                        // a sensor box value the box has not answered yet
+                        conv.write_str("-").unwrap();
                     }
                 }
             }
             Params::List(_params) => {
                 if let Content::List(val) = content {
-                    ((self.this()).content_as_str)(&mut conv, val);
+                    if *self == Editable::FlapCircling {
+                        // the list shows the names of the flap stages
+                        let t = cm.flap_table();
+                        conv.write_str(t.name(val.max(0) as usize)).unwrap();
+                    } else {
+                        ((self.this()).content_as_str)(&mut conv, val);
+                    }
                 }
             }
             Params::String(_params) => {

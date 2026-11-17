@@ -6,8 +6,8 @@ mod driver;
 use defmt::*;
 use defmt_rtt as _;
 
-use heapless::mpmc::MpMcQueue;
 use cortex_m_rt::entry;
+use heapless::mpmc::MpMcQueue;
 
 use stm32h7xx_hal::{pac, prelude::*};
 
@@ -35,13 +35,7 @@ fn main() -> ! {
         let input_pins = InputPins::new(gpiob.pb12, gpiob.pb13, gpiob.pb14, gpioh.ph7);
         let enc1_res = Enc1Res::new(ccdr.peripheral.TIM5, dp.TIM5, gpioa.pa0, gpioa.pa1);
         let enc2_res = Enc2Res::new(ccdr.peripheral.TIM3, dp.TIM3, gpiob.pb4.into(), gpioc.pc7);
-        Keyboard::new(
-            keyboard_pins,
-            input_pins, 
-            enc1_res, 
-            enc2_res, 
-            &Q_EVENTS
-        )
+        Keyboard::new(keyboard_pins, input_pins, enc1_res, enc2_res, &Q_EVENTS)
     };
 
     loop {
@@ -57,7 +51,7 @@ fn main() -> ! {
                     InputPinState::Io2(state) => info!("Input 2 state {}", *state as u32),
                     InputPinState::Io3(state) => info!("Input 3 state {}", *state as u32),
                     InputPinState::Io4(state) => info!("Input 4 state {}", *state as u32),
-                }
+                },
             }
         }
     }

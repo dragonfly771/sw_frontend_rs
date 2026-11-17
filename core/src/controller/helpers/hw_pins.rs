@@ -389,7 +389,7 @@ impl GearAlarmControl {
             },
         };
         cm.control.hw_pins.in_gear = state;
-        self.alarm_is_active(cm)
+        self.condition()
     }
 
     pub fn gear_pin_function(&self) -> InPinFunction {
@@ -413,7 +413,7 @@ impl GearAlarmControl {
             },
         };
         cm.control.hw_pins.in_breakes = state;
-        self.alarm_is_active(cm)
+        self.condition()
     }
 
     pub fn airbrakes_pin_function(&self) -> InPinFunction {
@@ -432,23 +432,12 @@ impl GearAlarmControl {
         self.gear_pins = mode;
     }
 
-    pub fn alarm_is_active(&self, cm: &mut CoreModel) -> bool {
-        let alarm = match self.gear_pins {
+    /// the alarm condition of the inputs: gear up (and, with two lines,
+    /// airbrakes open). What the display makes of it: controller/gear_alarm.rs
+    pub fn condition(&self) -> bool {
+        match self.gear_pins {
             GearPins::OnePinMode => self.gear_state,
             GearPins::TwoPinMode => self.gear_state && self.airbrakes_state,
-        };
-
-        if alarm {
-            if cm.config.overlay_active == OverlayActive::None {
-                cm.config.overlay_active = OverlayActive::Info;
-                cm.config.type_of_info = TypeOfInfo::GearAlarm;
-            }
-        } else if cm.config.type_of_info == TypeOfInfo::GearAlarm {
-            cm.config.type_of_info = TypeOfInfo::None;
-            if cm.config.overlay_active == OverlayActive::Info {
-                cm.config.overlay_active = OverlayActive::None;
-            }
         }
-        alarm
     }
 }

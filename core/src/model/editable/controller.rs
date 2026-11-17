@@ -9,10 +9,10 @@ use crate::{
         VARIO_MODE_CONTROL_AUTO, VARIO_MODE_CONTROL_CAN, VARIO_MODE_CONTROL_NMEA,
         VARIO_MODE_CONTROL_PIN,
     },
-    model::VarioModeControl,
+    model::{DisplayActive, OverlayActive, VarioModeControl},
     persist,
     utils::{TString, Variant},
-    CoreController, CoreModel, Echo, PersistenceId, Rotation,
+    CoreController, CoreModel, Echo, EditMode, PersistenceId, Rotation, Timer,
 };
 
 pub struct DrainPinConfig;
@@ -170,6 +170,64 @@ impl EditableFuncs for FlashTest {
 
     fn set_content(_cm: &mut CoreModel, cc: &mut CoreController, _content: Content) {
         cc.flash_control.activate_test();
+    }
+}
+
+/// Setup > System > Device Info: opens the device info page (firmware
+/// versions, sensor box state, ...) in place of the menu. Esc, a page
+/// change or the flight menu bring the pilot back to his pages.
+pub struct DeviceInfo;
+impl EditableFuncs for DeviceInfo {
+    fn name() -> &'static str {
+        "Device Info"
+    }
+
+    fn content(_cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::Command(TString::<16>::from_str(""))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Cmd(CmdParams {
+            content: TString::<16>::from_str(""),
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, _content: Content) {
+        // the menu has closed itself already (next menu = ROOT), now
+        // replace the editor overlay by the info page
+        let _ = cc.scheduler.stop(Timer::CloseEditFrame, false);
+        cm.control.editor.mode = EditMode::Off;
+        cm.config.overlay_active = OverlayActive::None;
+        cm.control.device_info_control.index = 0;
+        cm.config.display_active = DisplayActive::DeviceInfo;
+    }
+}
+
+/// Flight menu > Page Layout: the menu closes, the page that is shown goes
+/// into the edit mode (controller/page_layout.rs)
+pub struct PageLayout;
+impl EditableFuncs for PageLayout {
+    fn name() -> &'static str {
+        "Page Layout"
+    }
+
+    fn content(_cm: &mut CoreModel, _cc: &mut CoreController) -> Content {
+        Content::Command(TString::<16>::from_str(""))
+    }
+
+    fn params(_cm: &CoreModel) -> Params {
+        Params::Cmd(CmdParams {
+            content: TString::<16>::from_str(""),
+        })
+    }
+
+    fn set_content(cm: &mut CoreModel, cc: &mut CoreController, _content: Content) {
+        let _ = cc.scheduler.stop(Timer::CloseEditFrame, false);
+        cm.control.editor.mode = EditMode::Off;
+        cm.config.overlay_active = OverlayActive::None;
+        // opened in the setup (15.11.2026): the menu closes, the page shows
+        crate::controller::close_menu_display(cm, cc);
+        crate::controller::page_layout::start(cm);
     }
 }
 
@@ -490,7 +548,7 @@ impl EditableFuncs for UserProfile {
 pub struct VarioModeControl_;
 impl EditableFuncs for VarioModeControl_ {
     fn name() -> &'static str {
-        "Vario Control"
+        "Mode Control"
     }
 
     fn content(cm: &mut CoreModel, _cc: &mut CoreController) -> Content {

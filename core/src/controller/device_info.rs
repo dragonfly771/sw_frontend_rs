@@ -1,6 +1,6 @@
 use crate::{
     model::{device_info::DEVICE_INFO_CONTENT, DisplayActive},
-    view::{device_info::DEVICE_INFO_LINES, viewable::device_lineview::DeviceLineView},
+    view::{device_info::device_info_lines, viewable::device_lineview::DeviceLineView},
     CoreController, CoreModel, KeyEvent,
 };
 
@@ -32,10 +32,16 @@ pub fn key_action(key_event: &mut KeyEvent, cm: &mut CoreModel, _cc: &mut CoreCo
         }
         KeyEvent::Rotary2Right => {
             if cm.control.device_info_control.index
-                < (DEVICE_INFO_CONTENT.len() - DEVICE_INFO_LINES) as u32
+                < (DEVICE_INFO_CONTENT.len() - device_info_lines(cm)) as u32
             {
                 cm.control.device_info_control.index += 1;
             }
+        }
+        // opened from Setup > System > Device Info: Esc goes back to the
+        // active page (a page showing the device info itself stays)
+        KeyEvent::BtnEsc => {
+            crate::controller::editor::apply_page(cm);
+            *key_event = KeyEvent::NoEvent;
         }
         _ => (),
     }

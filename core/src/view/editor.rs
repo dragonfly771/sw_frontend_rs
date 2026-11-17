@@ -30,6 +30,17 @@ impl Edit {
         D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
     {
         self.val_str = cm.control.editor.get_value_line(cm);
+        // same editor idiom everywhere - inner circle over the vario page,
+        // full screen inside the setup menu
+        if cm.device_const.misc.edit_mode == EditMode::CircleArea {
+            return draw_info(
+                display,
+                cm,
+                self.name_str,
+                self.val_str.as_str(),
+                Some(cm.palette().list_edit.value),
+            );
+        }
         if cm.config.is_base_display() {
             match cm.device_const.misc.edit_mode {
                 EditMode::Off => Ok(()),

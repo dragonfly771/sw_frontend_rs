@@ -9,6 +9,8 @@ mod events;
 mod filter;
 mod idle_events;
 mod image;
+pub mod larus_fonts;
+pub mod math;
 mod metadata;
 mod parse;
 mod persistence;
@@ -62,7 +64,7 @@ pub(crate) mod tests {
         basic_config::MAX_TX_FRAMES, CoreController, CoreModel, DeviceConst, HwVersion, Images, Palette, QIdleEvents, QTxFrames, SwVersion
     };
     use heapless::spsc::Queue;
-    use u8g2_fonts::{fonts, FontRenderer};
+    use u8g2_fonts::FontRenderer;
 
     const HW_VERSION: HwVersion = HwVersion::from_bytes([1, 3, 1, 0]);
     const SW_VERSION: SwVersion = SwVersion {
@@ -87,8 +89,8 @@ pub(crate) mod tests {
         const DEVICE_CONST: DeviceConst = DeviceConst {
             dark_theme: Palette::default(),
             bright_theme: Palette::default(),
-            big_font: FontRenderer::new::<fonts::u8g2_font_fub20_tf>(),
-            small_font: FontRenderer::new::<fonts::u8g2_font_fub20_tf>(),
+            big_font: crate::utils::larus_fonts::TEXT_18,
+            small_font: crate::utils::larus_fonts::TEXT_18,
             images: Images::new(),
         };
 
@@ -97,3 +99,85 @@ pub(crate) mod tests {
         (model, controller)
     }
 }*/
+
+/// `f32::clamp` without the panic for min > max: the panic message formats
+/// floats and pulls about 10 KB of float formatting into the firmware
+pub trait FClamp {
+    fn fclamp(self, lo: f32, hi: f32) -> f32;
+}
+
+impl FClamp for f32 {
+    #[inline]
+    fn fclamp(self, lo: f32, hi: f32) -> f32 {
+        if self < lo {
+            lo
+        } else if self > hi {
+            hi
+        } else {
+            self
+        }
+    }
+}
+
+/// The device keeps its own colour table (CLUT of the V2 LTDC). A colour
+/// that is added to `Colors` but not to the CLUT shows up in whatever the
+/// CLUT RAM holds (28.10.2026: the menu header cap was light green on the
+/// display). Every index must be in all three tables with the same RGB.
+#[cfg(test)]
+mod color_table_tests {
+    use super::{Colors8, RGB565_COLORS};
+    use embedded_graphics::pixelcolor::{Rgb888, RgbColor};
+
+    #[test]
+    fn device_clut_matches_the_colors() {
+        let path = std::format!(
+            "{}/../device/larus_frontend_v2/src/driver/clut_colors.rs",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let src = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => return, // core checked out alone
+        };
+        let mut clut: std::vec::Vec<u32> = std::vec::Vec::new();
+        for line in src.lines() {
+            let t = line.trim();
+            if let Some(hex) = t.strip_prefix("0x") {
+                let v = u32::from_str_radix(&hex[..8], 16).unwrap();
+                clut.push(v);
+            }
+        }
+        let n = RGB565_COLORS.len();
+        assert_eq!(
+            clut.len(),
+            n,
+            "device CLUT has {} entries, Colors has {}",
+            clut.len(),
+            n
+        );
+        for (i, v) in clut.iter().enumerate() {
+            assert_eq!(
+                (v >> 24) as usize,
+                i,
+                "CLUT entry {i} carries index {}",
+                v >> 24
+            );
+            let c: Rgb888 = Colors8::from(i as u8).into();
+            let rgb = (c.r() as u32) << 16 | (c.g() as u32) << 8 | c.b() as u32;
+            assert_eq!(
+                v & 0xff_ffff,
+                rgb,
+                "CLUT {i}: {:06x}, Colors {:?}: {:06x}",
+                v & 0xff_ffff,
+                Colors8::from(i as u8),
+                rgb
+            );
+            let q = ((c.r() as u16 >> 3) << 11) | ((c.g() as u16 >> 2) << 5) | (c.b() as u16 >> 3);
+            assert_eq!(
+                RGB565_COLORS[i],
+                q,
+                "RGB565 table {i} {:?}",
+                Colors8::from(i as u8)
+            );
+        }
+    }
+}

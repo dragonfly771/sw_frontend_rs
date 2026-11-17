@@ -69,7 +69,7 @@ fn main() -> ! {
         display.clear(Colors::Black).unwrap();
         display
             .draw_img(
-                &*include_bytes!("../assets/wp_vario-5.lif"),
+                &*include_bytes!("../assets/wp_vario360-5.lif"),
                 Point::new(0, 0),
                 Some(Colors::White),
             )

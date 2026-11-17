@@ -67,7 +67,7 @@ mod app {
             can_tx,
             core_model,
             controller,
-            mut dev_view,
+            dev_view,
             idle_loop,
             keyboard,
             mono,
@@ -76,7 +76,8 @@ mod app {
             sound,
         ) = hw_init(cx.device, cx.core);
 
-        dev_view.setup_timer(DevInstant::from_ticks(timestamp_us() as u64));
+        // first frame right away, afterwards the LTDC line interrupt spawns
+        // the view task once per display refresh
         task_view::spawn().unwrap();
         task_controller::spawn().unwrap();
         task_keyboard::spawn().unwrap();
@@ -211,7 +212,7 @@ mod app {
             cx.shared.core_model.lock(|core_model| {
                 if controller.tick_1ms(core_model) {
                     rtic::pend(interrupt::DMA1_STR1); // check if there is something to send
-                    // set sound params
+                                                      // set sound params
                     cx.shared.sound.lock(|sound| {
                         sound.set_params(&core_model.calculated.sound_params);
                     });
@@ -236,21 +237,38 @@ mod app {
 
     /// Prepares the display and passes the data to the appropriate output routines.
     /// This mainly concerns the LCD but also the sound output.
+    ///
+    /// Runs once per display refresh (33.5 Hz), spawned by the LTDC line
+    /// interrupt at the start of the vertical blanking. A frame is thus
+    /// always shown for a whole number of refresh periods. The former 20 Hz
+    /// timer cadence on the 33.5 Hz panel showed frames alternately for one
+    /// and two periods, which made the moving needle judder; in addition the
+    /// wait for the buffer take-over is gone (no busy loop). If drawing takes
+    /// longer than one refresh the next one is skipped (16.8 Hz) instead of
+    /// tearing.
     #[task(local = [dev_view], shared = [core_model, statistics], priority=3)]
     fn task_view(mut cx: task_view::Context) {
         task_start!(cx, Task::View);
 
         let view = cx.local.dev_view;
-        cx.shared.core_model.lock(|core_model| {
-            view.core().prepare(core_model);
-        });
-        let _ = view.core().draw();
-        view.core().display.show();
-
-        let wake_up_at = view.wake_up_at();
-        task_view::spawn_at(wake_up_at).unwrap();
+        if !view.core().display.reload_pending() {
+            cx.shared.core_model.lock(|core_model| {
+                view.core().prepare_dt(core_model, LTDC_FRAME_S);
+            });
+            let _ = view.core().draw();
+            view.core().display.show();
+        }
 
         task_end!(cx, Task::View);
+    }
+
+    /// LTDC line interrupt: start of the vertical blanking, the buffer swap
+    /// requested by the last frame has just taken place - draw the next one
+    #[task(binds = LTDC, priority=4)]
+    fn isr_ltdc(_cx: isr_ltdc::Context) {
+        Ltdc::clear_line_irq();
+        // still busy with the previous frame: this refresh is skipped
+        let _ = task_view::spawn();
     }
 
     #[idle(local = [idle_loop])]

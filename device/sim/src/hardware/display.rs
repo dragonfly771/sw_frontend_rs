@@ -20,13 +20,6 @@ const DISPLAY_PIXELS_INC_PAD: u32 = (DISPLAY_WIDTH_INC_PAD)*(DISPLAY_HEIGHT_INC_
 const DISPLAY_WIDTH_1: u32 = DISPLAY_WIDTH - 1;
 const DISPLAY_HEIGHT_1: u32 = DISPLAY_HEIGHT - 1;
 
-#[cfg(feature = "air")]
-const BACKGROUND_IMAGE: &[u8] = include_bytes!("../device/air/background.png");
-
-#[cfg(feature = "v1")]
-const BACKGROUND_IMAGE: &[u8] = include_bytes!("../device/v1/background.png");
-
-#[cfg(all(feature = "v2", not(any(feature = "v1", feature = "air"))))]
 const BACKGROUND_IMAGE: &[u8] = include_bytes!("../device/v2/background.png");
 
 pub struct Display {

@@ -6,18 +6,18 @@ use embedded_storage::nor_flash::NorFlash;
 use heapless::{String, Vec};
 use stm32h7xx_hal::flash::FlashExt;
 
-use crate::{driver::*, HW_VERSION};
+use crate::driver::*;
 
-use super::SW_VERSION;
+use super::{hw_version_from_marker, SW_VERSION};
 
-pub fn update_available() -> Option<SwVersion> {
+pub fn update_available(allow_downgrade: bool) -> Option<SwVersion> {
     FILE_SYS.lock_during_use(|opt_fs| match opt_fs {
-        Some(fs) => update_available_private(fs),
+        Some(fs) => update_available_private(fs, allow_downgrade),
         None => None,
     })
 }
 
-fn update_available_private(fs: &mut FileSys) -> Option<SwVersion> {
+fn update_available_private(fs: &mut FileSys, allow_downgrade: bool) -> Option<SwVersion> {
     trace!("Check sd card");
     let mut volume = fs.vol_mgr().open_volume(VolumeIdx(0)).ok()?;
     let mut root_dir = volume.open_root_dir().ok()?;
@@ -36,7 +36,9 @@ fn update_available_private(fs: &mut FileSys) -> Option<SwVersion> {
         .ok()?;
 
     // check the *.bin files if there is something interesting there
-    let mut check = VersionCheck::new(HW_VERSION, SW_VERSION);
+    // only images for the same display variant (hardware version) are accepted
+    let mut check = VersionCheck::new(hw_version_from_marker(), SW_VERSION);
+    check.set_allow_downgrade(allow_downgrade);
     let mut buffer = [0_u8; SIZE_METADATA_V1];
     for name in files {
         let mut fname = String::<12>::new();
@@ -86,7 +88,8 @@ fn update_available_private(fs: &mut FileSys) -> Option<SwVersion> {
 
         // Check crc
         let meta_data = meta_data();
-        let upper_flash_u32 = unsafe { &*core::ptr::with_exposed_provenance::<[u32; 0x2_0000]>(STORAGE) };
+        let upper_flash_u32 =
+            unsafe { &*core::ptr::with_exposed_provenance::<[u32; 0x2_0000]>(STORAGE) };
         let new_app_start_idx = meta_data.new_app as usize - STORAGE;
         let new_app_end_idx = new_app_start_idx + meta_data.new_app_len as usize;
 

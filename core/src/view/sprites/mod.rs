@@ -1,16 +1,13 @@
 pub(crate) mod arrow;
-pub(crate) mod classic_indicator;
+pub(crate) mod menu_icons;
 pub(crate) mod polar_defs;
-pub(crate) mod scale_marker;
+pub(crate) mod ring_needle;
 pub(crate) mod simple_indicator;
-pub(crate) mod wind_arrow;
 
 pub(crate) use arrow::Arrow;
-pub(crate) use classic_indicator::ClassicIndicator;
 pub(crate) use polar_defs::*;
-pub(crate) use scale_marker::ScaleMarker;
+pub(crate) use ring_needle::{RingArrow, RingMarker, RingNeedle};
 pub(crate) use simple_indicator::SimpleIndicator;
-pub(crate) use wind_arrow::WindArrow;
 
 use crate::{utils::Colors, CoreError};
 use embedded_graphics::{
@@ -35,12 +32,6 @@ impl PolarCoordinate {
         let x = a.sin() * l;
         let y = -a.cos() * l;
         Point::new(x as i32, y as i32)
-    }
-
-    pub fn get_scaled_rotated(&self, scale: f32, rotation: f32) -> PolarCoordinate {
-        let alpha = self.alpha + rotation;
-        let len = self.len * scale;
-        PolarCoordinate { len, alpha }
     }
 
     pub fn rotate(&mut self, rotation: f32) {

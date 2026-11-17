@@ -1,6 +1,7 @@
 use crate::{driver::QEvents, timestamp_ms, CoreController};
 use corelib::{
-    CRxFrames, CoreModel, CPersistenceItems, PIdleEvents, PTxFrames, basic_config::{MAX_RX_FRAMES, MAX_TX_FRAMES}
+    basic_config::{MAX_RX_FRAMES, MAX_TX_FRAMES},
+    CPersistenceItems, CRxFrames, CoreModel, PIdleEvents, PTxFrames,
 };
 use stm32h7xx_hal::{adc, gpio::Pin, pac::ADC1, prelude::*};
 
@@ -36,10 +37,10 @@ impl DevController {
         temperature_pin: TemperutrePin,
     ) -> Self {
         let core_controller = CoreController::new(
-            core_model, 
+            core_model,
             queue_to_idle_task,
             queue_from_idle_task,
-            p_tx_frames
+            p_tx_frames,
         );
         let supply_pin = supply_pin.into_analog();
         let temperature_pin = temperature_pin.into_analog();
@@ -77,7 +78,12 @@ impl DevController {
         match self.tick_cnt {
             1 => {
                 let adc_value: u32 = self.adc.read(&mut self.supply_pin).unwrap();
-                core_model.device.supply_voltage = adc_value as f32 * 0.00050354004;
+                // smoothed in the core: median of 1 s against the dips of a
+                // canopy flasher, PT1, hysteresis of the last digit
+                let tc = core_model.config.av_supply_voltage_tc;
+                core_model
+                    .device
+                    .supply_sample(adc_value as f32 * 0.00050354004, tc);
             }
             2 => {
                 let adc_value: u32 = self.adc.read(&mut self.temperature_pin).unwrap();

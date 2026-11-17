@@ -23,6 +23,7 @@ pub enum DeviceLineView {
     Empty = 0,
     SensorBox,
     VarioDisplay,
+    Flarm,
 
     // lines of information (Vario Display)
     DisplayVersion = 20,
@@ -56,6 +57,13 @@ pub enum DeviceLineView {
     SlipAngle,
     TurnRate,
     HorizonAvailable,
+
+    // lines of information (FLARM port, canopy flasher)
+    FlarmData = 80,
+    FlarmBaud,
+    FlarmGps,
+    FlarmAlarm,
+    Flasher,
 }
 
 impl DeviceLineView {
@@ -96,11 +104,108 @@ impl DeviceLineView {
         Ok(())
     }
 
+    /// one row of the ring style device info page: name left, value right,
+    /// inset given by the caller so nothing leaves the round display
+    pub fn draw_ring<D>(
+        &self,
+        display: &mut D,
+        cm: &CoreModel,
+        center_x: i32,
+        y: i32,
+        half: i32,
+    ) -> Result<(), CoreError>
+    where
+        D: DrawTarget<Color = Colors, Error = CoreError> + DrawImage,
+    {
+        // sketch skizze_flarm_menue.png (5): names fub20 grey (u8g2 fub14),
+        // values inb27 white (u8g2 inb19), sections fub20 (fub14) with a
+        // short line, colour only for errors
+        use crate::view::fonts_p1::{text_for, VALUE_16, VALUE_19};
+        use embedded_graphics::{prelude::Primitive, primitives::PrimitiveStyle, Drawable};
+        let width = |f: &u8g2_fonts::FontRenderer, t: &str| {
+            f.get_rendered_dimensions(t, Point::zero(), VerticalPosition::Center)
+                .map(|d| d.advance.x)
+                .unwrap_or(0)
+        };
+        if let Some(header_text) = self.header_text() {
+            if !header_text.is_empty() {
+                // a section: white on the dark blue of the menu headers
+                // (no grey text with a line any more, 28.10.2026)
+                use embedded_graphics::primitives::{Rectangle, RoundedRectangle};
+                RoundedRectangle::with_equal_corners(
+                    Rectangle::new(
+                        Point::new(center_x - half, y + 4 - 18),
+                        embedded_graphics::prelude::Size::new((2 * half) as u32, 36),
+                    ),
+                    embedded_graphics::prelude::Size::new(8, 8),
+                )
+                .into_styled(PrimitiveStyle::with_fill(crate::view::ring_menu::CAP_FILL))
+                .draw(display)?;
+                text_for(25).f.render_aligned(
+                    header_text,
+                    Point::new(center_x, y + 4),
+                    VerticalPosition::Center,
+                    HorizontalAlignment::Center,
+                    FontColor::Transparent(Colors::White),
+                    display,
+                )?;
+            }
+            return Ok(());
+        }
+        let line_info = self.line_info(cm);
+        // name without the colon (ring design)
+        let name = line_info.name.trim_end().trim_end_matches(':');
+        text_for(20).f.render_aligned(
+            name,
+            Point::new(center_x - half + 8, y),
+            VerticalPosition::Center,
+            HorizontalAlignment::Left,
+            FontColor::Transparent(Colors::DarkGray),
+            display,
+        )?;
+        // a smaller size if name and value do not fit
+        let room = 2 * half - 16 - width(text_for(20).f, name) - 14;
+        let vfont = if width(&VALUE_19, line_info.value.as_str()) <= room {
+            &VALUE_19
+        } else {
+            &VALUE_16
+        };
+        let col = if self.is_error(cm) {
+            Colors::Tomato
+        } else {
+            Colors::White
+        };
+        crate::view::fonts_p1::render_value(
+            display,
+            vfont,
+            line_info.value.as_str(),
+            Point::new(center_x + half - 8, y),
+            VerticalPosition::Center,
+            HorizontalAlignment::Right,
+            col,
+        )?;
+        Ok(())
+    }
+
+    /// the value reports an error (shown in red)
+    fn is_error(&self, cm: &CoreModel) -> bool {
+        use crate::model::flarm_show::FlarmPortStatus;
+        let f = &cm.calculated.flarm;
+        match self {
+            DeviceLineView::FlarmData => !f.demo && f.status != FlarmPortStatus::Ok,
+            DeviceLineView::FlarmBaud => {
+                !f.demo && cm.config.flarm.fixed_baud().is_none() && !f.baud_locked
+            }
+            _ => false,
+        }
+    }
+
     fn header_text(&self) -> Option<&'static str> {
         match self {
             DeviceLineView::Empty => Some(""),
             DeviceLineView::SensorBox => Some("Sensor Box"),
             DeviceLineView::VarioDisplay => Some("Vario Display"),
+            DeviceLineView::Flarm => Some("FLARM"),
             _ => None,
         }
     }
@@ -156,6 +261,46 @@ impl DeviceLineView {
             DeviceLineView::OutPinFlash => LineInfo {
                 name: "Pin Flash: ",
                 value: tformat!(30, "out {}", cm.control.hw_pins.out_flash.as_str()).unwrap(),
+            },
+
+            // FLARM port and canopy flasher
+            DeviceLineView::FlarmData => LineInfo {
+                name: "Data: ",
+                value: tformat!(30, "{}", cm.calculated.flarm.status_str()).unwrap(),
+            },
+            DeviceLineView::FlarmBaud => LineInfo {
+                name: "Baud Rate: ",
+                value: {
+                    // the rate in use; "Auto" (red, sketch skizze_flarm_menue 6) while the automatic
+                    // detection has not found valid sentences yet
+                    let f = &cm.calculated.flarm;
+                    if cm.config.flarm.fixed_baud().is_some() || f.baud_locked {
+                        tformat!(30, "{}", f.baud).unwrap()
+                    } else {
+                        tformat!(30, "Auto").unwrap()
+                    }
+                },
+            },
+            DeviceLineView::FlarmGps => LineInfo {
+                name: "GPS: ",
+                value: tformat!(30, "{}", cm.calculated.flarm.gps_str()).unwrap(),
+            },
+            DeviceLineView::FlarmAlarm => LineInfo {
+                name: "Alarm: ",
+                value: tformat!(30, "{}", cm.calculated.flarm.alarm_level).unwrap(),
+            },
+            DeviceLineView::Flasher => LineInfo {
+                name: "Flasher: ",
+                value: {
+                    let f = &cm.calculated.flarm;
+                    if f.flasher_test {
+                        tformat!(30, "Test {}", f.flasher_seq).unwrap()
+                    } else if f.flasher_seq == 0 {
+                        tformat!(30, "Off").unwrap()
+                    } else {
+                        tformat!(30, "Seq {}", f.flasher_seq).unwrap()
+                    }
+                },
             },
 
             // Sensorbox values
@@ -250,14 +395,16 @@ impl DeviceLineView {
             },
 
             // These are empty or header lines, so this never can be addressed
-            DeviceLineView::Empty | DeviceLineView::SensorBox | DeviceLineView::VarioDisplay => {
-                LineInfo {
-                    name: "Error",
-                    value: tformat!(30, "Error").unwrap(),
-                }
-            }
+            DeviceLineView::Empty
+            | DeviceLineView::SensorBox
+            | DeviceLineView::VarioDisplay
+            | DeviceLineView::Flarm => LineInfo {
+                name: "Error",
+                value: tformat!(30, "Error").unwrap(),
+            },
         };
-        if cm.control.system_state == SystemState::NoCom && (*self as u8) >= 50 {
+        // sensor box values (50..79) without CAN connection: no value
+        if cm.control.system_state == SystemState::NoCom && (50..80).contains(&(*self as u8)) {
             lv.value = tformat!(30, "-").unwrap();
         }
         lv

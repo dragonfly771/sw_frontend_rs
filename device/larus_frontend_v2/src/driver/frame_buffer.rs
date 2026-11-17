@@ -38,11 +38,23 @@ impl FrameBuffer {
         }
     }
 
+    /// Swap without waiting for the reload. The LTDC takes the new buffer
+    /// over at the next vertical blanking; the caller (the VSYNC synchronized
+    /// view task) draws into the returned buffer only after the next line
+    /// interrupt, i.e. after that reload.
+    pub fn swap_buffers_nowait(&mut self) -> TBuffer {
+        mem::swap(&mut self.foreground, &mut self.background);
+        self.ltdc.set_frame_buffer(self.background.as_ptr());
+        unsafe { transmute::<&mut [u8; AVAIL_PIXELS], TBuffer>(self.foreground) }
+    }
+
     /// Swap foreground and background and return the reference to the current foreground. At the
     /// same time, the LTDC is informed to use the buffer for background.
     pub fn swap_buffers(&mut self) -> TBuffer {
         mem::swap(&mut self.foreground, &mut self.background);
         self.ltdc.set_frame_buffer(self.background.as_ptr());
+        // the returned buffer is on screen until the reload happened
+        self.ltdc.wait_reload();
 
         // The process ensures that the respective buffer is only used by one instance, so unsafe
         // is ok here.

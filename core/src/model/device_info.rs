@@ -1,10 +1,9 @@
 use crate::view::viewable::device_lineview::DeviceLineView;
 
+/// sections follow each other directly, the headers carry a line (sketch
+/// skizze_menue_info.png "Vorschlag: Geraeteinfo")
 pub const DEVICE_INFO_CONTENT: &[DeviceLineView] = &[
     // Vario Display
-    DeviceLineView::Empty,
-    DeviceLineView::Empty,
-    DeviceLineView::Empty,
     DeviceLineView::VarioDisplay,
     DeviceLineView::DisplayVersion,
     DeviceLineView::SupplyVoltage,
@@ -14,9 +13,21 @@ pub const DEVICE_INFO_CONTENT: &[DeviceLineView] = &[
     DeviceLineView::InPinDrain,
     DeviceLineView::InPinGear,
     DeviceLineView::InPinSpeedToFly,
-    DeviceLineView::OutPinFlash,
+    // FLARM port and SteFly canopy flasher (on the former flash output);
+    // only with the crate feature `flarm` (parked, model/flarm_cfg.rs)
+    #[cfg(feature = "flarm")]
+    DeviceLineView::Flarm,
+    #[cfg(feature = "flarm")]
+    DeviceLineView::FlarmData,
+    #[cfg(feature = "flarm")]
+    DeviceLineView::FlarmBaud,
+    #[cfg(feature = "flarm")]
+    DeviceLineView::FlarmGps,
+    #[cfg(feature = "flarm")]
+    DeviceLineView::FlarmAlarm,
+    #[cfg(feature = "flarm")]
+    DeviceLineView::Flasher,
     // Sensor Box
-    DeviceLineView::Empty,
     DeviceLineView::SensorBox,
     DeviceLineView::SensorboxVersion,
     DeviceLineView::GnssAccuracityOk,
@@ -38,8 +49,4 @@ pub const DEVICE_INFO_CONTENT: &[DeviceLineView] = &[
     DeviceLineView::SlipAngle,
     DeviceLineView::TurnRate,
     DeviceLineView::HorizonAvailable,
-    DeviceLineView::Empty,
-    DeviceLineView::Empty,
-    DeviceLineView::Empty,
-    DeviceLineView::Empty,
 ];
